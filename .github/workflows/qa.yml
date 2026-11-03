@@ -1,0 +1,37 @@
+name: Website QA
+
+on:
+  workflow_dispatch:
+    inputs:
+      fresh:
+        description: 'Start a new testing cycle (ignore saved progress)'
+        type: boolean
+        default: true
+  schedule:
+    - cron: '17 2 * * 1'   # Mondays 02:17 UTC (07:47 India time)
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - uses: actions/cache@v4
+        with:
+          path: state
+          key: qa-state-${{ github.run_id }}
+          restore-keys: qa-state-
+      - name: Run QA
+        run: npx tsx src/run.ts ${{ (github.event_name == 'schedule' || inputs.fresh) && '--fresh' || '' }}
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qa-report
+          path: reports/latest
+          retention-days: 30
