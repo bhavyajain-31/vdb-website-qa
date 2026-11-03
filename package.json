@@ -1,0 +1,27 @@
+{
+  "name": "vdb-website-qa",
+  "version": "2.0.0",
+  "description": "Fast, resumable website QA for the VDB Shopify store: homepage clicks, deeplinks, product pages, images and page speed, with a plain-language dashboard.",
+  "scripts": {
+    "qa": "tsx src/run.ts",
+    "qa:fresh": "tsx src/run.ts --fresh",
+    "qa:retest-failed": "tsx src/run.ts --retest-failed",
+    "qa:quick": "tsx src/run.ts --fresh --depth 1 --max-links 40 --budget 8 --out reports/quick --state state/quick.json",
+    "qa:mobile": "tsx src/run.ts --viewport mobile --out reports/mobile --state state/mobile.json",
+    "report": "tsx src/rerender.ts",
+    "setup": "playwright install chromium",
+    "typecheck": "tsc -p ."
+  },
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "playwright": "^1.63.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "$comment": "Default settings for npm run qa. Command-line options override these. See README → Configuration.",
+  "baseUrl": "https://shopify.vdbapp.com/",
+  "timeBudgetMin": 23,
+  "maxDepth": 2,
+  "maxLinks": 400,
+  "cardsPerListing": 2,
+  "modalsPerSearch": 1,
+  "appConcurrency": 3,
+  "refreshPerPage": 3,
+  "confirmSlow": 40,
+  "viewport": "desktop",
+  "perf": { "fastMs": 3000, "slowMs": 6000 }
+}
