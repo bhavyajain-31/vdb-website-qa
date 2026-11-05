@@ -22,8 +22,8 @@ const RULES: Record<string, Rule> = {
     fix: 'Check the element is visible, not covered by another element, and has a working link.', owner: 'Developer',
   },
   'Required option feedback': {
-    severity: 'minor', title: 'Button silently waits for a required choice',
-    explain: d => `The button does nothing until an option is chosen, and no message says so. ${d}`,
+    severity: 'critical', title: 'Button does nothing and shows no message',
+    explain: d => `The button does nothing until an option is chosen, and no popup or message tells the shopper why. ${d}`,
     fix: 'Show a clear message such as "Please choose a ring size" when the button is clicked without a selection.', owner: 'Developer',
   },
   'Direct open': {

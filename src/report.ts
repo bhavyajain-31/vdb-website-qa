@@ -137,7 +137,8 @@ export function perfRows(r: RunReport, cfg: Config): (PerfSample & { samples?: n
 
 export function writeReports(r: RunReport, cfg: Config): { json: string; html: string } {
   fs.mkdirSync(cfg.outDir, { recursive: true });
-  r.scenarios = [...r.scenarios.filter(s => s.kind !== 'copy'), ...placeholderComponent(r.links)];
+  // template/placeholder copy is accepted on this store: no longer reported as a problem
+  r.scenarios = r.scenarios.filter(s => s.kind !== 'copy');
   const json = path.join(cfg.outDir, 'results.json');
   fs.writeFileSync(json, JSON.stringify({ summary: summarize(r), ...r }, null, 1));
   const html = path.join(cfg.outDir, 'dashboard.html');
@@ -147,20 +148,22 @@ export function writeReports(r: RunReport, cfg: Config): { json: string; html: s
   return { json, html };
 }
 
-function positionsOf(r: RunReport, l: LinkResult): string {
-  const ps = (r.placements ?? []).filter(p => p.key === l.key).map(p => p.position.join(' › '));
-  return ps.length ? ps.join(' | ') : (l.position ?? []).join(' › ');
-}
 
 function writeCsv(r: RunReport, file: string) {
   const q = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const head = ['ID', 'Result', 'Severity', 'Link text', 'Position', 'Found in', 'Found on page', 'Link URL', 'Expected page', 'Actually opened', 'HTTP', 'Ready (s)', 'Product type', 'Problem', 'What to do', 'Tested at', 'From run'];
-  const rows = r.links.map(l => [
-    l.id, l.status, l.issues[0]?.severity ?? '', l.label, positionsOf(r, l), l.section, l.sourceUrl, l.href, PAGE_TYPES[l.destType] ?? l.destType,
-    l.directUrl ?? l.clickUrl ?? '', l.directHttpStatus ?? '', l.perf?.readyMs ? (l.perf.readyMs / 1000).toFixed(1) : '',
-    l.product?.kindLabel ?? '', l.failureReasons.join(' | '), l.issues.map(i => i.fix).join(' | '), l.testedAt, l.runId ?? '',
-  ].map(q).join(','));
-  fs.writeFileSync(file, '﻿' + [head.map(q).join(','), ...rows].join('\n'));
+  const head = ['Row ID', 'Page test ID', 'Result', 'Severity', 'Link text (as shown)', 'Position / route', 'Link URL', 'Expected page', 'Actually opened', 'HTTP', 'Ready (s)', 'Product type', 'Problem', 'What to do', 'Tested at'];
+  const rows: string[] = [];
+  for (const l of r.links) {
+    const places = (r.placements ?? []).filter(p => p.key === l.key);
+    const base = (status: string, label: string, pos: string[], issues: LinkResult['issues'], reasons: string[], rid: string) => [
+      rid, l.id, status, issues[0]?.severity ?? '', label, pos.join(' › '), l.href, PAGE_TYPES[l.destType] ?? l.destType,
+      l.directUrl ?? l.clickUrl ?? '', l.directHttpStatus ?? '', l.perf?.readyMs ? (l.perf.readyMs / 1000).toFixed(1) : '',
+      l.product?.kindLabel ?? '', reasons.join(' | '), issues.map(i => i.fix).join(' | '), l.testedAt,
+    ].map(q).join(',');
+    if (places.length) for (const p of places) rows.push(base(p.status, p.label, p.position, p.issues, p.reasons, p.pid));
+    else rows.push(base(l.status, l.label, l.position ?? [], l.issues, l.failureReasons, l.id));
+  }
+  fs.writeFileSync(file, '\ufeff' + [head.map(q).join(','), ...rows].join('\n'));
 }
 
 function writePlacementsCsv(r: RunReport, file: string) {

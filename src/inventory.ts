@@ -20,7 +20,15 @@ export class Inventory {
     return inv;
   }
 
-  placements() { return [...this.bySlot.values()]; }
+  /**
+   * Visible placements. Each distinct CTA text is its own placement (a banner with "Statement pieces…" and
+   * "SHOP NECKLACES" gives two rows); a text-less image/icon link is dropped when its card already has a text link.
+   */
+  placements() {
+    const all = [...this.bySlot.values()];
+    const withText = new Set(all.filter(p => p.label !== '(no text)').map(p => `${p.group}|${p.rawHref}`));
+    return all.filter(p => p.label !== '(no text)' || !withText.has(`${p.group}|${p.rawHref}`));
+  }
   /** Forget placements before re-crawling the homepage (ids stay stable for unchanged slots). */
   resetPlacements() { this.bySlot.clear(); }
 
@@ -29,14 +37,14 @@ export class Inventory {
     if (!a.slot) return;
     const shown = a.visible || a.inSlide || reveal.kind === 'menu' || reveal.kind === 'drawer';
     if (!shown) return;
-    const slotKey = 'S|' + a.slot;
+    const slotKey = 'S|' + a.slot + '|' + label;
     if (!this.ids[slotKey]) { this.next.p = (this.next.p ?? 0) + 1; this.ids[slotKey] = `H${String(this.next.p).padStart(3, '0')}`; }
     const pid = this.ids[slotKey];
     const existing = this.bySlot.get('P|' + pid);
-    if (existing) { if (existing.label === '(no text)' && label !== '(no text)') existing.label = label; return; }
+    if (existing) return;
     this.bySlot.set('P|' + pid, {
       pid, key, position: a.position ?? [], section: a.section, label, rawHref: a.rawHref, reveal,
-      secId: a.secId, nth: a.nth, visibleAtLoad: a.visible && reveal.kind === 'none',
+      secId: a.secId, nth: a.nth, visibleAtLoad: a.visible && reveal.kind === 'none', group: a.slot,
     });
   }
 

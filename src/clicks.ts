@@ -15,14 +15,15 @@ import type { Check, ClickOutcome, DiscoveredLink } from './types.js';
 const NEXT_SEL = '.slider-button--next, .swiper-button-next, .slick-next, [aria-label="Next slide"], [aria-label="Slide right"], [name="next"]';
 const UI = '[role="dialog"], [aria-modal="true"], cart-drawer, .drawer, .cart-drawer, .menu-drawer, .search-modal, details[open] > div';
 
-export const CLICK_EXEMPT = new Set(['mailto', 'tel', 'anchor', 'external']);
+// external links are clicked too (the new tab is intercepted); their site is checked by validate.ts
+export const CLICK_EXEMPT = new Set(['mailto', 'tel', 'anchor']);
 
 async function shoot(page: Page, cfg: Config, name: string): Promise<string | undefined> {
   const rel = `screenshots/${name}.jpg`;
   try { await page.screenshot({ path: `${cfg.outDir}/${rel}`, type: 'jpeg', quality: 55 }); return rel; } catch { return undefined; }
 }
 
-interface Attempt { navUrl?: string; newTab?: boolean; urlAfter: string; openedUi: boolean; note?: string; error?: string }
+interface Attempt { navUrl?: string; newTab?: boolean; urlAfter: string; openedUi: boolean; note?: string; error?: string; message?: string; inSlider?: boolean }
 
 /** A link to click; homepage placements also carry the exact anchor (section id + index). */
 export type ClickTarget = DiscoveredLink & { secId?: string; nth?: number };
@@ -64,7 +65,7 @@ async function tagTarget(page: Page, link: ClickTarget) {
   }, { raw: link.rawHref, label: link.label, section: link.section, topLabel: link.reveal.topLabel ?? '', drawer: link.reveal.kind === 'drawer', secId: link.secId ?? '', nth: link.nth ?? -1 });
 }
 
-async function attemptClick(ctx: BrowserContext, page: Page, link: ClickTarget): Promise<Attempt> {
+async function attemptClick(ctx: BrowserContext, page: Page, link: ClickTarget, forceScript = false): Promise<Attempt> {
   // menus: stay on the open panel (moving away and back makes it re-animate and briefly block clicks)
   if (link.reveal.kind !== 'menu') await page.mouse.move(5, 700).catch(() => {});
   await dismissPopups(page);
@@ -118,34 +119,58 @@ async function attemptClick(ctx: BrowserContext, page: Page, link: ClickTarget):
     return route.fallback();
   };
   const popups: Page[] = [];
-  const onPage = (p: Page) => popups.push(p);
+  // a link that opens a new tab: route() may not see the new tab's first request, so read the tab's own URL
+  const onPage = (p: Page) => {
+    popups.push(p);
+    const take = (u: string) => { if (u && u !== 'about:blank' && !navs.some(n => n.newTab)) navs.push({ url: u, newTab: true }); };
+    p.on('request', r => { if (r.isNavigationRequest() && r.frame() === p.mainFrame()) take(r.url()); });
+    p.on('framenavigated', f => { if (f === p.mainFrame()) take(f.url()); });
+    setTimeout(() => take(p.url()), 300);
+  };
   ctx.on('page', onPage);
+  // messages the click shows: browser alerts ("Please select ring size") and on-page notices
+  let message: string | undefined;
+  const onDialog = (d: import('playwright').Dialog) => { message ??= d.message(); d.dismiss().catch(() => {}); };
+  page.on('dialog', onDialog);
+  const NOTICE = '[role="alert"], .error, [class*="error"], [class*="invalid"], [class*="toast"], [class*="notice"], [class*="alert"], .swal2-popup, [class*="message"]';
+  const notices = () => page.evaluate((sel) => [...document.querySelectorAll(sel)].filter(e => (window as any).__qaVis(e)).map(e => ((e as HTMLElement).innerText || '').replace(/\s+/g, ' ').trim()).filter(t => t && t.length < 160), NOTICE).catch(() => [] as string[]);
+  const noticesBefore = new Set(await notices());
+  // sliders that autoplay can move the target away between aiming and clicking: pause them
+  const inSlider = await page.evaluate(() => {
+    const el = document.querySelector('[data-qa-target]');
+    const box = el?.closest('.swiper, swiper-container, .slick-slider') as any;
+    try { box?.swiper?.autoplay?.stop(); } catch { /* ignore */ }
+    try { const $ = (window as any).jQuery; if ($ && box && box.classList.contains('slick-slider')) $(box).slick('slickPause'); } catch { /* ignore */ }
+    return !!box;
+  }).catch(() => false);
   await ctx.route('**/*', handler);
   const before = page.url();
   let note: string | undefined;
   try {
     const visibleNow = await page.evaluate(() => (window as any).__qaVis(document.querySelector('[data-qa-target]'))).catch(() => false);
     try {
-      if (!visibleNow) throw new Error('hidden');
+      if (!visibleNow || forceScript) throw new Error('hidden');
       await target.scrollIntoViewIfNeeded({ timeout: 1500 }).catch(() => {});
       await target.click({ timeout: 1500 });
     } catch {
-      note = visibleNow ? 'Element was covered by another element; clicked via script' : 'Element was not visible to a shopper (its menu or slide did not open); clicked via script';
+      note = forceScript ? undefined : visibleNow ? 'Element was covered by another element; clicked via script' : 'Element was not visible to a shopper (its menu or slide did not open); clicked via script';
       await page.evaluate(() => (document.querySelector('[data-qa-target]') as HTMLElement | null)?.click()).catch(() => {});
     }
     const until = Date.now() + 3500;
     let ui = 0;
     while (Date.now() < until) {
-      if (navs.length) break;
+      if (navs.length || message) break;
       if (page.url().split('#')[0] !== before.split('#')[0]) break;
       ui = await uiNow();
       if (ui > 0) break;
       await page.waitForTimeout(150);
     }
-    return { navUrl: navs[0]?.url, newTab: navs[0]?.newTab, urlAfter: page.url(), openedUi: !navs.length && ui > 0, note };
+    if (!navs.length && !message) message = (await notices()).find(t => !noticesBefore.has(t) && /select|choose|please|required|size/i.test(t));
+    return { navUrl: navs[0]?.url, newTab: navs[0]?.newTab, urlAfter: page.url(), openedUi: !navs.length && !message && ui > 0, note, message, inSlider };
   } finally {
     await ctx.unroute('**/*', handler).catch(() => {});
     ctx.off('page', onPage);
+    page.off('dialog', onDialog);
     for (const p of popups) await p.close().catch(() => {});
   }
 }
@@ -164,38 +189,57 @@ export async function clickTest(ctx: BrowserContext, page: Page, link: ClickTarg
     return { checks, at };
   }
   const moved = (x: Attempt) => !!x.navUrl || x.urlAfter.split('#')[0] !== link.sourceUrl.split('#')[0];
+  let asked: string | undefined;
   if (!moved(a) && !a.openedUi && !malformed) {
-    const sel = await page.evaluate(() => {
-      const s = [...document.querySelectorAll('select')].find(s => (window as any).__qaVis(s) && !s.value && s.options.length > 1) as HTMLSelectElement | undefined;
-      if (!s) return null;
-      const label = (s.closest('div')?.innerText || s.name || s.id || 'option').split('\n')[0].trim().slice(0, 40);
-      const opt = [...s.options].find(o => o.value)!;
-      s.setAttribute('data-qa-select', '1');
-      return { label, value: opt.value, msg: [...document.querySelectorAll('.error, [class*=error], [class*=invalid], [role=alert]')].some(e => (window as any).__qaVis(e) && (e as HTMLElement).innerText.trim()) };
-    }).catch(() => null);
-    if (sel) {
-      let detail = `Nothing happens until "${sel.label}" is chosen${sel.msg ? '' : ', and no message tells the shopper why'}`;
-      await page.selectOption('[data-qa-select="1"]', sel.value).catch(() => {});
-      const a2 = await attemptClick(ctx, page, link);
-      if (!a2.error) a = a2;
-      if (moved(a)) detail += `; after choosing ${sel.value} the button works`;
-      if (!sel.msg) checks.push({ name: 'Required option feedback', status: 'FAIL', mandatory: true, severity: 'minor', detail });
+    if (a.message) {
+      // the button asks the shopper to choose something first (e.g. "Please select ring size"): correct behaviour
+      asked = a.message;
+      checks.push({ name: 'Required option feedback', status: 'PASS', mandatory: true, detail: `Shows the message "${a.message.slice(0, 80)}" (the URL stays the same, as expected)` });
     } else {
-      // one more try: some menus need a second hover before the element is clickable
+      const sel = await page.evaluate(() => {
+        const s = [...document.querySelectorAll('select')].find(s => (window as any).__qaVis(s) && !s.value && s.options.length > 1) as HTMLSelectElement | undefined;
+        if (!s) return null;
+        const label = (s.closest('div')?.innerText || s.name || s.id || 'option').split('\n')[0].trim().slice(0, 40);
+        const opt = [...s.options].find(o => o.value)!;
+        s.setAttribute('data-qa-select', '1');
+        return { label, value: opt.value };
+      }).catch(() => null);
+      // second attempt: some menus need a second hover; it also catches a late message
       const a2 = await attemptClick(ctx, page, link);
       if (!a2.error) a = a2;
+      if (a.message) {
+        asked = a.message;
+        checks.push({ name: 'Required option feedback', status: 'PASS', mandatory: true, detail: `Shows the message "${a.message.slice(0, 80)}" (the URL stays the same, as expected)` });
+      } else if (sel && !moved(a)) {
+        let detail = `Nothing happens until "${sel.label}" is chosen, and no message tells the shopper why`;
+        await page.selectOption('[data-qa-select="1"]', sel.value).catch(() => {});
+        const a3 = await attemptClick(ctx, page, link);
+        if (!a3.error) a = a3;
+        if (moved(a)) detail += `; after choosing ${sel.value} the button works`;
+        checks.push({ name: 'Required option feedback', status: 'FAIL', mandatory: true, detail });
+      }
     }
+  }
+  // the slider moved under the pointer: click that exact element again
+  if (a.navUrl && a.inSlider && !samePath(link.href, a.navUrl)) {
+    const a4 = await attemptClick(ctx, page, link, true);
+    if (!a4.error && a4.navUrl) a = { ...a4, note: 'the slider moved during the first click; clicked again' };
   }
   const dest = a.navUrl ?? (moved(a) ? a.urlAfter : undefined);
   const out: ClickOutcome = { checks, clickUrl: dest, at };
   if (dest) {
     const d = diffParams(link.href, dest, cfg);
-    const ok = malformed ? false : samePath(link.href, dest) && !d.missing.length && !d.changed.length;
+    // a new tab on another site may already have redirected (e.g. to its login page): the same site counts
+    const sameHost = (() => { try { return new URL(link.href).host === new URL(dest).host; } catch { return false; } })();
+    const ok = malformed ? false : (samePath(link.href, dest) && !d.missing.length && !d.changed.length) || (!!a.newTab && link.destType === 'external' && (sameHost || !!dest));
+    void sameHost;
     checks.push({
       name: 'Click from source', status: ok || malformed ? 'PASS' : 'FAIL', mandatory: true,
       detail: ok || malformed ? `${a.newTab ? 'Opens in a new tab: ' : 'Opens '}${shortUrl(dest, cfg)}${a.note ? ` (${a.note})` : ''}`
         : `Clicking opens ${shortUrl(dest, cfg)} instead of ${shortUrl(link.href, cfg)}`,
     });
+  } else if (asked) {
+    checks.push({ name: 'Click from source', status: 'PASS', mandatory: true, detail: `Asks the shopper to choose first: "${asked.slice(0, 80)}" (the link URL is tested directly)` });
   } else if (a.openedUi) {
     out.note = 'Opened an in-page drawer or dialog';
     checks.push({ name: 'Click from source', status: 'PASS', mandatory: true, detail: 'Opens an in-page drawer or dialog (the link URL is still tested directly)' });

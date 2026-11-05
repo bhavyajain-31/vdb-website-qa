@@ -42,6 +42,8 @@ export interface Harvest {
   inv: Inventory;
   /** Called for each newly discovered link, with its click result from this page. */
   found: (link: DiscoveredLink, click?: ClickOutcome) => void;
+  /** Route to a link as a shopper clicks it, e.g. ["Mega menu", "FINE JEWELRY", "WEDDING BANDS", "Diamond Bands"]. */
+  routeOf?: (link: DiscoveredLink) => string[];
 }
 
 function softFailure(expected: string, actual: string, expectedType: string, cfg: Config): string | null {
@@ -72,18 +74,30 @@ export async function validateLink(browser: Browser, link: DiscoveredLink, cfg: 
   }
   if (link.destType === 'external') {
     if (!cfg.checkExternal) {
-      checks.push({ name: 'External link', status: 'SKIPPED', mandatory: true, detail: 'Link to another website; run with --external to check it' });
+      checks.push({ name: 'External link', status: 'SKIPPED', mandatory: true, detail: 'Link to another website; external checks are switched off (checkExternal)' });
       return finish();
     }
-    const ctx = await newContext(browser, cfg);
+    // open the other site in a real browser: social sites answer plain requests differently from browsers
+    const ctx = await newContext(browser, { ...cfg, blockThirdParty: null });
     ctxRef.ctx = ctx;
     try {
-      const r = await ctx.request.get(link.href, { timeout: 20_000, maxRedirects: 10 });
-      const s = r.status();
-      checks.push({ name: 'External link reachable', status: s < 400 ? 'PASS' : s === 429 || s === 403 || s === 999 ? 'BLOCKED' : 'FAIL', mandatory: true, detail: `HTTP ${s}` });
+      const page = await ctx.newPage();
+      const resp = await page.goto(link.href, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(e => { throw e; });
+      await page.waitForTimeout(1500);
+      const s = resp?.status() ?? 0;
+      v.directUrl = page.url();
+      v.directHttpStatus = s;
+      v.pageTitle = await page.title().catch(() => '');
+      const text = ((await page.evaluate(() => document.body?.innerText || '').catch(() => '')) as string).slice(0, 3000);
+      const gone = /page (isn't|is not) available|this page isn't available|page not found|content isn't available|this account doesn't exist|channel does not exist|sorry, this page/i.test(text + ' ' + v.pageTitle);
+      const host = new URL(v.directUrl).host;
+      const login = /login|signin|accounts\//i.test(new URL(v.directUrl).pathname);
+      if (s === 404 || s === 410 || s >= 500 || gone) checks.push({ name: 'External link reachable', status: 'FAIL', mandatory: true, detail: `${host} says the page does not exist${s ? ` (HTTP ${s})` : ''}` });
+      else if (s === 403 || s === 429 || s === 999) checks.push({ name: 'External link reachable', status: 'BLOCKED', mandatory: true, detail: `${host} refused automated visitors (HTTP ${s}); please check it by hand` });
+      else checks.push({ name: 'External link reachable', status: 'PASS', mandatory: true, detail: `Opens ${host}${login ? ' (the site asks visitors to log in first)' : ''} · HTTP ${s}` });
     } catch (e) {
-      checks.push({ name: 'External link reachable', status: 'BLOCKED', mandatory: true, detail: (e as Error).message.split('\n')[0] });
-    } finally { await ctx.close(); }
+      checks.push({ name: 'External link reachable', status: 'BLOCKED', mandatory: true, detail: `Could not reach the site: ${(e as Error).message.split('\n')[0]}` });
+    } finally { await ctx.close().catch(() => {}); }
     return finish();
   }
 
@@ -191,7 +205,8 @@ export async function validateLink(browser: Browser, link: DiscoveredLink, cfg: 
     if (lf && ['megamenu', 'header', 'footer', 'sliders'].includes(link.section)) checks.push({ ...lf, severity: 'minor' });
 
     const ph = await placeholderCopy(page);
-    if (ph.length) { v.placeholder = ph; checks.push({ name: 'Placeholder text', status: 'FAIL', mandatory: true, severity: 'minor', detail: ph[0] }); }
+    // template text is accepted on this demo store: recorded for information, never a failure
+    if (ph.length) { v.placeholder = ph; checks.push({ name: 'Placeholder text', status: 'PASS', mandatory: false, detail: `Template text present (accepted): "${ph[0].slice(0, 80)}"` }); }
 
     tick('placeholder');
     // ---- 3. images (in the main content; header/footer images are covered on the homepage)
@@ -312,8 +327,10 @@ async function harvestLinks(ctx: BrowserContext, page: import('playwright').Page
       if (t === 'anchor' || others >= cfg.linksPerPage) continue;
     }
     const label = isPager && /^\d+$/.test(a.label.trim()) ? `Page ${a.label.trim()}` : a.label;
-    const where = fromListing ? `${PAGE_NAME[type] ?? 'Listing'}: ${srcName}` : `${PAGE_NAME[type] ?? 'Detail page'}: ${srcName}`;
-    const position = [where, isCard ? `Product card ${cards + 1}` : isPager ? 'Pagination' : fromListing ? 'Category / filter link' : 'Link on page'];
+    // route a shopper follows to reach this link: where the page's own link sits, the CTA clicked, then the spot on that page
+    const route = h.routeOf?.(src) ?? [`${PAGE_NAME[type] ?? 'Page'}: ${srcName}`];
+    const spot = isCard ? `product card ${cards + 1}` : isPager ? 'pagination' : fromListing ? 'category link on the page' : 'button/link on the page';
+    const position = [...route, spot];
     const added = h.inv.add({ ...a, label, section, position }, page.url(), depth, { kind: 'none' });
     if (added) {
       fresh.push(added);

@@ -58,24 +58,27 @@ export async function readAnchors(page: Page, rootSel: string, forced?: Section)
     const tc = (s: string) => s.toLowerCase().replace(/(^|[\s/(-])([a-z])/g, (_m, p, c) => p + c.toUpperCase());
     const SLIDE = '.swiper-slide, .slick-slide, .slideshow__slide, .slider__slide, [data-qa-slides] > *';
     const DUP = '.slick-cloned, .swiper-slide-duplicate';
+    // section names exactly as shoppers see them (the section heading as displayed)
     const secName = (sec: Element) => {
       const id = sec.id || '';
-      if (/slideshow/i.test(id)) return 'Hero slideshow';
-      const type = tc(id.split('__').pop()!.replace(/_[A-Za-z0-9]{6}$/, '').replace(/^index_/, '').replace(/_\d*$/, '').replace(/_/g, ' ').trim());
-      const h = sec.querySelector('h1, h2, h3, .banner__heading, .title') as HTMLElement | null;
-      const ht = norm(h?.textContent).slice(0, 40);
-      return ht ? `${tc(ht)} (${type.toLowerCase()})` : type;
+      if (/slideshow/i.test(id)) return 'Hero section';
+      const h = [...sec.querySelectorAll('h1, h2, h3, .banner__heading, .title')].find(x => norm((x as HTMLElement).innerText)) as HTMLElement | undefined;
+      const ht = norm(h?.innerText).slice(0, 50);
+      if (ht) return ht;
+      const type = id.split('__').pop()!.replace(/_[A-Za-z0-9]{6}$/, '').replace(/^index_/, '').replace(/_\d*$/, '').replace(/_/g, ' ').trim();
+      return tc(type);
     };
     const groupLabel = (a: Element, stop: Element | null, own: string) => {
-      // nearest ancestor list item / column whose own heading (summary, first link or heading) is not this link
-      for (let n: Element | null = a.parentElement; n && n !== stop; n = n.parentElement) {
-        if (!/^(LI|DIV|DETAILS|UL)$/.test(n.tagName)) continue;
-        for (const ch of [...n.children]) {
-          if (ch.contains(a)) break;
-          if (/^(SUMMARY|A|SPAN|H2|H3|H4|H5|P|STRONG|DIV)$/.test(ch.tagName)) {
-            const t = norm((ch as HTMLElement).innerText || ch.textContent);
-            if (t && t.length < 40 && t !== own) return t;
-          }
+      // a link that heads its own sub-list (e.g. "Bracelets" above Tennis/Fashion Bracelets) is itself a group heading
+      if (a.nextElementSibling && /^(UL|OL)$/.test(a.nextElementSibling.tagName)) return '';
+      // otherwise: the nearest heading-like element *before* the list this link sits in
+      for (let n: Element | null = a; n && n !== stop; n = n.parentElement) {
+        for (let sib = n.previousElementSibling; sib; sib = sib.previousElementSibling) {
+          if (/^(UL|OL|LI)$/.test(sib.tagName)) continue;
+          if (!/^(SUMMARY|A|SPAN|H2|H3|H4|H5|P|STRONG|DIV|BUTTON)$/.test(sib.tagName)) continue;
+          const t = norm((sib as HTMLElement).innerText || sib.textContent);
+          if (t && t.length < 40 && t !== own) return t;
+          if (t) break;
         }
       }
       return '';
@@ -88,7 +91,7 @@ export async function readAnchors(page: Page, rootSel: string, forced?: Section)
         const top = norm((li?.querySelector('summary, a, button, span') as HTMLElement | null)?.innerText);
         const g = groupLabel(a, li, lab);
         // icon link + text link of the same menu item = one placement (slot without the label)
-        return { position: ['Mega menu', tc(top || 'Menu'), ...(g && g.toLowerCase() !== top.toLowerCase() ? [tc(g)] : [])], slot: 'm|' + top + '|' + g + '|' + a.getAttribute('href'), inSlide: false };
+        return { position: ['Mega menu', top || 'Menu', ...(g && g.toLowerCase() !== top.toLowerCase() ? [g] : [])], slot: 'm|' + top + '|' + g + '|' + a.getAttribute('href'), inSlide: false };
       }
       if (sec === 'header') {
         if (/scrollable|announcement/i.test(sid)) return { position: ['Header', 'Announcement bar'], slot: 'h|' + a.getAttribute('href'), inSlide: false };
@@ -104,7 +107,7 @@ export async function readAnchors(page: Page, rootSel: string, forced?: Section)
           if (hds.length === 1) { h = norm((hds[0] as HTMLElement).innerText || hds[0].textContent); break; }
         }
         const social = a.closest('.list-social, .footer__list-social, [class*="social"]');
-        const g = social ? 'Social icons' : h ? tc(h) : a.closest('.footer__content-bottom, .policies, [class*="policies"], .footer__copyright, .policies-link') ? 'Bottom bar' : 'Footer';
+        const g = social ? 'Social icons' : h ? h : a.closest('.footer__content-bottom, .policies, [class*="policies"], .footer__copyright, .policies-link') ? 'Bottom bar' : 'Footer';
         void social;
         return { position: ['Footer', g], slot: 'f|' + g + '|' + a.getAttribute('href') + '|' + lab, inSlide: false };
       }
@@ -118,7 +121,7 @@ export async function readAnchors(page: Page, rootSel: string, forced?: Section)
         const sibs = [...box.children].filter(x => x.matches(SLIDE) && !x.matches(DUP));
         const idx = Number(slide.getAttribute('data-swiper-slide-index') ?? slide.getAttribute('data-slick-index') ?? sibs.indexOf(slide));
         const isCard = !!slide.querySelector('.card-wrapper, .card, [data-prids]');
-        parts.push(`${isCard ? 'Product' : 'Slide'} ${idx + 1} of ${sibs.length}`);
+        parts.push(`${isCard ? 'product' : 'slide'} ${idx + 1} of ${sibs.length}`);
         slot += `|s${boxes.indexOf(box)}-${idx}`;
         return { position: parts, slot, inSlide: true };
       }
@@ -126,7 +129,7 @@ export async function readAnchors(page: Page, rootSel: string, forced?: Section)
       if (card && shop) {
         const cards = [...shop.querySelectorAll('.card-wrapper, .collection-list__item, .grid__item')].filter(c => !c.parentElement?.closest('.card-wrapper, .collection-list__item, .grid__item'));
         const i = cards.indexOf(card.closest('.card-wrapper, .collection-list__item, .grid__item') || card);
-        if (i >= 0) { parts.push(`Item ${i + 1} of ${cards.length}`); slot += `|c${i}`; }
+        if (i >= 0) { parts.push(`item ${i + 1} of ${cards.length}`); slot += `|c${i}`; }
       }
       return { position: parts, slot, inSlide: false };
     };
@@ -182,12 +185,12 @@ async function crawlMegaMenu(page: Page, cfg: Config, inv: Inventory, components
       anchors = (await readAnchors(page, 'header')).filter(a => a.visible && !baseline.has(a.rawHref + '|' + a.label));
       mode = 'click';
     }
-    const topName = t.label.toLowerCase().replace(/(^|\s)([a-z])/g, (_m, p, c) => p + c.toUpperCase());
+    const topName = t.label;
     for (const a of anchors) inv.add({ ...a, section: 'megamenu', position: a.position?.[0] === 'Mega menu' ? a.position : ['Mega menu', topName] }, page.url(), 0, { kind: 'menu', topLabel: t.label });
     const rec = record(page);
     // every icon and image in the open panel is tested, however small
     const img = await checkImages(page, rec, cfg, 'header', 1);
-    const tn = t.label.toLowerCase().replace(/(^|\s)([a-z])/g, (_m, p, c) => p + c.toUpperCase());
+    const tn = t.label;
     // keep what this panel shows: hidden copies (other panels, mobile drawer) and the header logo are not part of it
     const inPanel = new Set(await page.evaluate((label) => {
       const li = [...document.querySelectorAll('header nav > ul > li, header .list-menu--inline > li')].find(l => (l.querySelector('summary, a, button, span') as HTMLElement | null)?.innerText.trim().replace(/\s+/g, ' ') === label);

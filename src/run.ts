@@ -158,8 +158,16 @@ async function main() {
         st.links = inv.all();
         enqueue(l);
       },
+      // the first homepage place of a link (exact CTA text), or the route recorded when it was found deeper
+      routeOf: (l: DiscoveredLink) => {
+        const p = st.placements.find(p => p.key === l.key && p.label !== '(no text)') ?? st.placements.find(p => p.key === l.key);
+        if (p) return [...p.position, `"${p.label}"`];
+        return l.position?.length ? [...l.position.slice(0, -1), `${l.position[l.position.length - 1]} "${l.label}"`] : [`"${l.label}"`];
+      },
     };
-    const overBudget = () => Date.now() - t0 > budgetMs - reserveMs;
+    // keep time for re-testing failures alone at the end (about 25 s each, at most 5 min)
+    const recheckMs = () => Math.min(300_000, Object.values(st.validations).filter(v => v.status === 'FAIL' && !v.recheck).length * 25_000);
+    const overBudget = () => Date.now() - t0 > budgetMs - reserveMs - recheckMs();
     await Promise.all(Array.from({ length: cfg.concurrency }, async (_, w) => {
       for (;;) {
         if (interrupted) { stoppedReason ??= 'Stopped by user (Ctrl+C)'; return; }
@@ -200,6 +208,39 @@ async function main() {
       }
     }));
     st.links = inv.all();
+
+    // ---- re-test every failure on its own, one at a time, before reporting it.
+    // Many failures under parallel load are the store being busy (results not loading, popups not opening).
+    const toRecheck = inv.all().filter(l => st.validations[l.key]?.status === 'FAIL' && !st.validations[l.key].recheck);
+    if (toRecheck.length && !interrupted) {
+      console.log(`[recheck] re-testing ${toRecheck.length} failed links one at a time`);
+      for (const l of toRecheck) {
+        if (Date.now() - t0 > budgetMs - reserveMs) break;
+        const first = st.validations[l.key];
+        const ctxRef: { ctx?: BrowserContext } = {};
+        const again = await withTimeout<Validation | null>(cfg.caseTimeoutMs, ctxRef, () => validateLink(browser, l, cfg, runId, null, ctxRef), () => null);
+        if (!again) continue;
+        const firstFails = first.checks.filter(c => c.mandatory && c.status === 'FAIL').map(c => `${c.name}: ${c.detail ?? ''}`);
+        if (again.status === 'FAIL') {
+          again.recheck = 'confirmed';
+          for (const c of again.checks) if (c.mandatory && c.status === 'FAIL') c.detail = `${c.detail ?? ''} (confirmed: failed again when re-tested on its own)`;
+        } else {
+          again.recheck = 'cleared';
+          again.firstFailure = firstFails;
+          again.checks.push({ name: 'Recheck', status: 'PASS', mandatory: false, detail: `Failed during the busy parallel run (${firstFails.map(f => f.split(':')[0]).join(', ')}); passed when re-tested on its own` });
+        }
+        again.attempts = first.attempts + 1;
+        st.validations[l.key] = again;
+        console.log(`  [recheck] ${l.id} ${again.recheck === 'confirmed' ? 'still FAILS' : 'now ' + again.status} ${l.label.slice(0, 40)}`);
+        saveState(cfg, st);
+      }
+      // homepage clicks that failed: click them again on a fresh homepage
+      const failedClicks = st.placements.filter(p => st.placementClicks[p.pid] && pageStatus(st.placementClicks[p.pid].checks) === 'FAIL');
+      if (failedClicks.length && Date.now() - t0 < budgetMs - reserveMs) {
+        const targets = failedClicks.flatMap(p => { const l = inv.get(p.key); return l ? [{ ...l, id: p.pid, label: p.label, section: p.section, reveal: p.reveal, rawHref: p.rawHref, sourceUrl: cfg.baseUrl, secId: p.secId, nth: p.nth }] : []; });
+        await homeClicks(browser, targets, cfg, st, {});
+      }
+    }
 
     // ---- confirm slow pages: re-measure them one at a time, without the test's own load on the machine
     const slow = inv.all().map(l => ({ l, v: st.validations[l.key] })).filter(x => x.v?.perf?.rating === 'slow' && !x.v.perf.measuredAlone)

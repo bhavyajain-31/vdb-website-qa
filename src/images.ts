@@ -43,7 +43,7 @@ export async function checkImages(page: Page, rec: NavRecord, cfg: Config, scope
       const root = document.querySelector(scope) || document.body;
       const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
       const trackRe = tracking.map((t: string) => new RegExp(t));
-      const PRODUCT = '[data-prids], [data-product-name], .card-wrapper, .card, .vdb-rb-list-product-item, .vdb-search-result-block, .vdb-gem-product-image-block, .product__media-item, .product__media, .product-media, [class*="product-gallery"], [class*="vdb-rb-product"], [class*="vdb-product"]';
+      const PRODUCT = '.vdb-spjc-product-card, [data-prids], [data-product-name], .card-wrapper, .card, .vdb-rb-list-product-item, .vdb-search-result-block, .vdb-gem-product-image-block, .product__media-item, .product__media, .product-media, [class*="product-gallery"], [class*="vdb-rb-product"], [class*="vdb-product"]';
       const ctxOf = (el: Element) => {
         let productId: string | undefined;
         const p = el.closest('[data-prids]') as HTMLElement | null;

@@ -70,7 +70,7 @@ const defaults: Config = {
   imageTimeoutMs: 8_000,
   caseTimeoutMs: 150_000,
   timeBudgetMin: 23,
-  checkExternal: false,
+  checkExternal: true,
   outDir: path.resolve('reports/latest'),
   stateFile: path.resolve('state/progress.json'),
   fresh: false,
@@ -140,7 +140,7 @@ Scope
   --cards <n>           Product cards sampled per listing (default ${defaults.cardsPerListing})
   --modals <n>          Result modals opened per diamond/gemstone search (default ${defaults.modalsPerSearch})
   --only <regex>        Test only links whose label or URL matches
-  --external            Also check external links (social etc.)
+  --no-external         Do not open links to other websites (social icons etc.)
   --refresh-all         Reload-test every app result page (default: ${defaults.refreshPerPage} per page type)
   --viewport <v>        desktop | tablet | mobile (default desktop)
 
@@ -180,6 +180,7 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
       case '--state': c.stateFile = path.resolve(take(i++)); break;
       case '--budget': c.timeBudgetMin = Number(take(i++)); break;
       case '--external': c.checkExternal = true; break;
+      case '--no-external': c.checkExternal = false; break;
       case '--refresh-all': c.refreshPerPage = 0; break;
       case '--headed': c.headless = false; break;
       case '--fresh': c.fresh = true; break;

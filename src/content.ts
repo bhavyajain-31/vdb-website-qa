@@ -9,7 +9,8 @@ const CARDS: Partial<Record<DestType, { card: string; name: string; price: strin
   'diamond-search': { card: '.vdb-search-result-block', name: '@data-product-name', price: '.vdb-product-prize', img: 'img' },
   'gemstone-search': { card: '.vdb-gem-product-image-block', name: '@data-product-name', price: '.vdb-gem-product-title-and-price h3', img: 'img' },
   'rb-list': { card: '.vdb-rb-list-product-item', name: '.vdb-rb-product-name', price: '.vdb-rb-price h3, .vdb-rb-price', img: 'img' },
-  collection: { card: '.card-wrapper', name: '.card__heading', price: '.price-item, .price', img: 'img' },
+  // Dawn product cards, and the VDB configurator's own cards on "Configure …" collections
+  collection: { card: '.card-wrapper, .vdb-spjc-product-card', name: '.card__heading, .vdb-spjc-product-card__title', price: '.price-item, .price, .vdb-spjc-product-card__price', img: 'img' },
   search: { card: '.card-wrapper', name: '.card__heading', price: '.price-item, .price', img: 'img' },
 };
 
@@ -25,7 +26,8 @@ export async function waitForContent(page: Page, type: DestType, cfg: Pick<Confi
       const h = await page.waitForFunction(({ card }) => {
         const w = window as any;
         const t = document.body?.innerText || '';
-        const cards = document.querySelectorAll(card).length;
+        // placeholder (skeleton) cards render before the data: only count cards that have text
+        const cards = [...document.querySelectorAll(card)].filter(c => (c.textContent || '').trim().length > 2).length;
         const count = w.__qaCount() as number | undefined;
         const empty = /No results found|No products found|Use fewer filters/i.test(t) || count === 0;
         if (cards > 0) {
@@ -33,7 +35,8 @@ export async function waitForContent(page: Page, type: DestType, cfg: Pick<Confi
           w.__qaEmptySince = undefined;
           // the "N results" total can render after the cards: give it a moment
           w.__qaCardsSince ??= Date.now();
-          return count !== undefined || Date.now() - w.__qaCardsSince > 1500 ? 'ready' : false;
+          // "0 Products" next to visible cards is the counter not updated yet: wait a little longer for it
+          return (count !== undefined && count > 0) || Date.now() - w.__qaCardsSince > 3000 ? 'ready' : false;
         }
         // a search link without filters opens the app's search form, not a result list
         const form = /(Natural Diamonds|Lab-Grown Diamonds|Gemstone) Search/i.test(t) && count === undefined && !/\bResults\b/.test(t.replace(/Show All Results|Search Results/g, ''));
@@ -79,7 +82,7 @@ export async function readListing(page: Page, type: DestType): Promise<ListingIn
     const vis = (window as any).__qaVis as (e: Element) => boolean;
     const text = document.body.innerText;
     const count = (window as any).__qaCount() as number | undefined;
-    const cards = [...document.querySelectorAll(s.card)].filter(vis);
+    const cards = [...document.querySelectorAll(s.card)].filter(c => vis(c) && (c.textContent || '').trim().length > 2);
     const names: string[] = [], incomplete: string[] = [];
     for (const c of cards) {
       const name = (s.name.startsWith('@') ? (c as HTMLElement).getAttribute(s.name.slice(1)) : c.querySelector(s.name)?.textContent)?.replace(/\s+/g, ' ').trim() || '';
@@ -96,7 +99,7 @@ export async function readListing(page: Page, type: DestType): Promise<ListingIn
       if (key) seen.set(key, (seen.get(key) || 0) + 1);
     }
     return {
-      resultCount: count,
+      resultCount: count === 0 && cards.length ? undefined : count,
       displayed: cards.length,
       emptyState: /No results found|No products found/i.test(text) || count === 0,
       mismatches: [] as string[],

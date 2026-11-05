@@ -24,7 +24,7 @@ export function renderDashboard(r: RunReport, cfg: Config): string {
     runs: r.runs, cfg: r.config, sum, areas: AREAS, types: PAGE_TYPES, perfCfg: cfg.perf,
     links: r.links.map(l => ({
       id: l.id, s: l.status, label: l.label, sec: l.section, dt: l.destType, depth: l.depth, pos: l.position ?? [],
-      places: (r.placements ?? []).filter(p => p.key === l.key).map(p => ({ pid: p.pid, pos: p.position, s: p.status })),
+      places: (r.placements ?? []).filter(p => p.key === l.key).map(p => ({ pid: p.pid, pos: p.position, s: p.status, label: p.label, issues: p.issues, reasons: p.reasons, click: short(p.clickUrl) })),
       src: short(l.sourceUrl), href: short(l.href), raw: l.rawHref, click: short(l.clickUrl), direct: short(l.directUrl), http: l.directHttpStatus,
       chain: l.redirectChain, issues: l.issues, reasons: l.failureReasons,
       checks: l.checks.map(c => ({ n: c.name, s: c.status, d: c.detail, m: c.mandatory })),
@@ -332,7 +332,7 @@ function show(id){
     return '<tr><td style="width:38%"><div class="lbl">' + e(p.label) + '</div><div class="small">' + e(D.types[p.type]||p.type) + '</div></td><td style="width:45%"><div class="bar"><i class="' + p.rating + '" style="width:' + Math.max(2,(p.ready||0)/max*100) + '%"></i></div></td><td class="num">' + secs(p.ready) + '</td><td>' + rating(p.rating) + '</td></tr>';
   }).join('') + '</tbody></table></div>';
   h += '<h2>Load time of every page</h2><div class="controls"><button class="chip" id="pfSlow" aria-pressed="false">Slow only</button><input type="search" id="pfQ" placeholder="Find a page…" aria-label="Find a page"></div><div class="panel tbl"><table><thead><tr>' +
-    '<th class="sort" data-k="label">Page</th><th class="hide-s">Type</th><th class="num sort" data-k="ready">Main content ready</th><th class="num sort hide-s" data-k="ttfb">Server responded</th><th class="num sort hide-s" data-k="load">Fully loaded</th><th class="num sort hide-s" data-k="kb">Downloaded</th><th>Rating</th></tr></thead><tbody id="pfBody"></tbody></table></div>' +
+    '<th class="sort" data-k="label">Page</th><th class="hide-s">Type</th><th class="num sort" data-k="ready">Main content ready</th><th class="num sort hide-s" data-k="ttfb">Server responded</th><th class="num sort hide-s" data-k="load">Fully loaded</th><th class="num sort hide-s" data-k="kb">Downloaded</th></tr></thead><tbody id="pfBody"></tbody></table></div>' +
     '<p class="small">✔ = measured on its own (reliable). Other times were measured while several pages were being tested at once, so they are higher than a shopper would see; pages that looked slow are re-measured on their own.</p>';
 
   // homepage placements: every visible place a link appears
@@ -361,8 +361,8 @@ function show(id){
     var rows = D.perf.filter(function(p){ return (!pf.slow || p.rating==='slow') && (!pf.q || (p.label + ' ' + p.url).toLowerCase().indexOf(pf.q) >= 0); })
       .sort(function(a,b){ var x=a[pf.k], y=b[pf.k]; if (typeof x === 'string') return pf.dir * x.localeCompare(y); return pf.dir * ((x||0)-(y||0)); });
     document.getElementById('pfBody').innerHTML = rows.map(function(p){
-      return '<tr><td><div class="lbl">' + e(p.label) + (p.id ? ' <span class="small">' + e(p.id) + '</span>' : '') + '</div>' + link(p.url) + (p.slow ? '<div class="small">Slowest file: ' + e(p.slow.url.slice(0,80)) + ' (' + secs(p.slow.ms) + ')</div>' : '') + '</td><td class="hide-s">' + e(D.types[p.type]||p.type) + '</td><td class="num">' + secs(p.ready) + '</td><td class="num hide-s">' + secs(p.ttfb) + '</td><td class="num hide-s">' + secs(p.load) + '</td><td class="num hide-s">' + (p.kb ? (p.kb > 1024 ? (p.kb/1024).toFixed(1) + ' MB' : p.kb + ' KB') : '–') + '</td><td>' + prating(p) + '</td></tr>';
-    }).join('') || '<tr><td colspan="7" class="empty">No pages match.</td></tr>';
+      return '<tr><td><div class="lbl">' + e(p.label) + (p.id ? ' <span class="small">' + e(p.id) + '</span>' : '') + '</div>' + link(p.url) + (p.slow ? '<div class="small">Slowest file: ' + e(p.slow.url.slice(0,80)) + ' (' + secs(p.slow.ms) + ')</div>' : '') + '</td><td class="hide-s">' + e(D.types[p.type]||p.type) + '</td><td class="num">' + secs(p.ready) + '</td><td class="num hide-s">' + secs(p.ttfb) + '</td><td class="num hide-s">' + secs(p.load) + '</td><td class="num hide-s">' + (p.kb ? (p.kb > 1024 ? (p.kb/1024).toFixed(1) + ' MB' : p.kb + ' KB') : '–') + '</td></tr>';
+    }).join('') || '<tr><td colspan="6" class="empty">No pages match.</td></tr>';
   }
   document.getElementById('pfSlow').onclick = function(){ pf.slow = !pf.slow; this.setAttribute('aria-pressed', String(pf.slow)); renderPerf(); };
   document.getElementById('pfQ').oninput = function(){ pf.q = this.value.toLowerCase(); renderPerf(); };
@@ -399,13 +399,20 @@ function show(id){
 // ---------- DEEPLINKS
 var LS = Object.assign({ status:'FAIL', area:'all', ptype:'all', q:'', open:null }, store('links') || {});
 var linkById = {}; D.links.forEach(function(l){ linkById[l.id] = l; });
+// one row per place a shopper can click (homepage links appear once per position, with their exact text);
+// links found deeper (product cards, links on product pages) get one row each with their route
+var ROWS = [];
+D.links.forEach(function(l){
+  if (l.places.length) l.places.forEach(function(p){ ROWS.push(Object.assign({}, l, { rid: p.pid, s: p.s, label: p.label, pos: p.pos, issues: p.issues, reasons: p.reasons, click: p.click || l.click, where: p.pos[0] })); });
+  else ROWS.push(Object.assign({}, l, { rid: l.id, where: l.depth === 0 ? 'Homepage' : 'Deeper pages' }));
+});
 (function(){
   var el = document.getElementById('t-links');
-  el.innerHTML = '<h2>Deeplinks</h2><p class="lead">Every link URL found on the site, opened directly in a fresh browser (like a shopper opening a shared or bookmarked link). Each one is checked for: the page opens, it is the right page, filters are kept, content and prices appear, images load, and the page survives a refresh. Click a row for details. (Back-button behaviour is not tested.)</p>' +
+  el.innerHTML = '<h2>Deeplinks</h2><p class="lead">Every link on the site, one row per place it appears, with the exact text shoppers see and its position (for links on listing and product pages: the route to reach them from the homepage). Each link URL is also opened directly in a fresh browser (like a shopper opening a shared or bookmarked link). Each one is checked for: the page opens, it is the right page, filters are kept, content and prices appear, images load, and the page survives a refresh. Click a row for details. (Back-button behaviour is not tested.)</p>' +
     '<div class="controls" id="lfStatus"></div><div class="controls"><select id="lfArea" aria-label="Where the link was found"></select><select id="lfType" aria-label="Product type"></select><input type="search" id="lfQ" placeholder="Find by name, URL, stock number…" aria-label="Find a link"><a class="btn" href="deeplinks.csv" download>Download CSV</a></div>' +
     '<div class="panel tbl"><table><thead><tr><th>Result</th><th>Link</th><th class="hide-s">Position</th><th>Link URL &amp; expected page</th><th>What actually happened</th><th>Reason</th><th class="num hide-s">Ready</th></tr></thead><tbody id="lfBody"></tbody></table></div>';
   var areaSel = document.getElementById('lfArea');
-  areaSel.innerHTML = '<option value="all">Found anywhere</option>' + D.areas.map(function(a){ var n = D.links.filter(function(l){ return l.sec===a.key; }).length; return n ? '<option value="' + a.key + '">' + e(a.label) + ' (' + n + ')</option>' : ''; }).join('');
+  areaSel.innerHTML = '<option value="all">Anywhere</option>' + ['Header','Mega menu','Homepage','Footer','Deeper pages'].map(function(a){ var n = ROWS.filter(function(r){ return r.where===a; }).length; return n ? '<option value="' + e(a) + '">' + e(a === 'Deeper pages' ? 'Listing & product pages' : a) + ' (' + n + ')</option>' : ''; }).join('');
   var kinds = {}; D.links.forEach(function(l){ var k = l.prod ? l.prod.kl : (D.types[l.dt]||l.dt); kinds[k] = (kinds[k]||0)+1; });
   var typeSel = document.getElementById('lfType');
   typeSel.innerHTML = '<option value="all">Any page type</option>' + Object.keys(kinds).sort().map(function(k){ return '<option value="' + e(k) + '">' + e(k) + ' (' + kinds[k] + ')</option>'; }).join('');
@@ -426,10 +433,10 @@ function kindOf(l){ return l.prod ? l.prod.kl : (D.types[l.dt]||l.dt); }
 function renderLinks(){
   store('links', { status:LS.status, area:LS.area, ptype:LS.ptype, q:LS.q });
   document.getElementById('lfArea').value = LS.area; document.getElementById('lfType').value = LS.ptype; document.getElementById('lfQ').value = LS.q;
-  var base = D.links.filter(function(l){
-    if (LS.area!=='all' && l.sec!==LS.area) return false;
+  var base = ROWS.filter(function(l){
+    if (LS.area!=='all' && l.where!==LS.area) return false;
     if (LS.ptype!=='all' && kindOf(l)!==LS.ptype) return false;
-    if (LS.q) { var hay = (l.label + ' ' + (l.pos||[]).join(' ') + ' ' + l.places.map(function(p){ return p.pos.join(' '); }).join(' ') + ' ' + l.href + ' ' + l.direct + ' ' + l.id + ' ' + (l.stock||'') + ' ' + (l.prod && l.prod.t || '')).toLowerCase(); if (hay.indexOf(LS.q.toLowerCase()) < 0) return false; }
+    if (LS.q) { var hay = (l.label + ' ' + (l.pos||[]).join(' ') + ' ' + l.href + ' ' + l.direct + ' ' + l.id + ' ' + l.rid + ' ' + (l.stock||'') + ' ' + (l.prod && l.prod.t || '')).toLowerCase(); if (hay.indexOf(LS.q.toLowerCase()) < 0) return false; }
     return true;
   });
   var st = document.getElementById('lfStatus');
@@ -440,13 +447,15 @@ function renderLinks(){
   st.querySelectorAll('button').forEach(function(b){ b.onclick = function(){ LS.status = b.getAttribute('data-s'); renderLinks(); }; });
   var rows = base.filter(function(l){ return LS.status==='all' || l.s===LS.status; });
   var sevRank = {critical:0,performance:1,minor:2};
-  rows.sort(function(a,b){ var x = a.issues[0] ? sevRank[a.issues[0].severity] : 9, y = b.issues[0] ? sevRank[b.issues[0].severity] : 9; return x-y || a.id.localeCompare(b.id); });
+  var areaRank = {'Header':0,'Mega menu':1,'Homepage':2,'Footer':3,'Deeper pages':4};
+  rows.sort(function(a,b){ var x = a.issues[0] ? sevRank[a.issues[0].severity] : 9, y = b.issues[0] ? sevRank[b.issues[0].severity] : 9; return x-y || (areaRank[a.where]||5)-(areaRank[b.where]||5) || a.rid.localeCompare(b.rid); });
   document.getElementById('lfBody').innerHTML = rows.map(function(l){
     var actual = l.direct ? link(l.direct) + (l.http ? ' <span class="small">HTTP ' + l.http + '</span>' : '') : (l.click ? link(l.click) : '<span class="small">–</span>');
     if (l.count != null || l.shown != null) actual += '<div class="small">' + (l.count != null ? l.count + ' results, ' : '') + (l.shown||0) + ' shown</div>';
     var reason = l.issues.length ? l.issues.map(function(i){ return sev(i.severity) + ' ' + e(i.title); }).join('<br>') : (l.s==='PASS' ? '<span class="small">All checks passed</span>' : '<span class="small">' + e(l.reasons[0]||'') + '</span>');
-    var row = '<tr class="row" data-id="' + e(l.id) + '"><td>' + pill(l.s) + '</td><td><div class="lbl">' + e(l.label) + '</div><span class="small">' + e(l.id) + (l.prod ? ' · ' + e(l.prod.kl) : '') + '</span></td><td class="hide-s" style="min-width:200px">' + posText(l) + '</td><td>' + link(l.href) + '<div class="small">Expected: ' + e(D.types[l.dt]||l.dt) + '</div></td><td>' + actual + '</td><td>' + reason + '</td><td class="num hide-s">' + (l.ready ? secs(l.ready) + '<br>' + prating(l) : '–') + '</td></tr>';
-    if (LS.open === l.id) row += '<tr class="detail"><td colspan="7">' + detail(l) + '</td></tr>';
+    var pos = (l.pos && l.pos.length ? l.pos.map(e).join(' › ') : e(AREA[l.sec]||l.sec));
+    var row = '<tr class="row" data-id="' + e(l.rid) + '"><td>' + pill(l.s) + '</td><td><div class="lbl">' + e(l.label) + '</div><span class="small">' + e(l.rid) + (l.rid !== l.id ? ' · page ' + e(l.id) : '') + (l.prod ? ' · ' + e(l.prod.kl) : '') + '</span></td><td class="hide-s" style="min-width:220px">' + pos + '</td><td>' + link(l.href) + '<div class="small">Expected: ' + e(D.types[l.dt]||l.dt) + '</div></td><td>' + actual + '</td><td>' + reason + '</td><td class="num hide-s">' + (l.ready ? secs(l.ready) + '<br>' + prating(l) : '–') + '</td></tr>';
+    if (LS.open === l.rid) row += '<tr class="detail"><td colspan="7">' + detail(l) + '</td></tr>';
     return row;
   }).join('') || '<tr><td colspan="7" class="empty">No links match these filters.</td></tr>';
   document.getElementById('lfBody').querySelectorAll('tr.row').forEach(function(tr){ tr.onclick = function(){ var id = tr.getAttribute('data-id'); LS.open = LS.open===id ? null : id; renderLinks(); }; });
@@ -469,7 +478,9 @@ function detail(l){
 }
 function openLink(id){
   var l = linkById[id]; if (!l) return;
-  LS.status = l.s; LS.area = 'all'; LS.ptype = 'all'; LS.q = ''; LS.open = id; renderLinks(); show('links');
+  var r = ROWS.filter(function(x){ return x.id === id; }).sort(function(a,b){ return (a.s==='FAIL'?0:1)-(b.s==='FAIL'?0:1); })[0] || l;
+  LS.status = r.s; LS.area = 'all'; LS.ptype = 'all'; LS.q = ''; LS.open = r.rid || id; renderLinks(); show('links');
+  id = r.rid || id;
   setTimeout(function(){ var tr = document.querySelector('tr.row[data-id="' + id + '"]'); if (tr) tr.scrollIntoView({ block:'center' }); }, 30);
 }
 renderLinks();

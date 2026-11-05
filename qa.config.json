@@ -8,6 +8,7 @@
   "modalsPerSearch": 1,
   "appConcurrency": 3,
   "refreshPerPage": 3,
+  "checkExternal": true,
   "confirmSlow": 40,
   "viewport": "desktop",
   "perf": { "fastMs": 3000, "slowMs": 6000 }

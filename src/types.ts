@@ -69,6 +69,8 @@ export interface Placement {
   nth?: number;
   /** Visible without hovering or sliding. */
   visibleAtLoad: boolean;
+  /** Card/slide/menu item the link belongs to (several CTAs can share one). */
+  group?: string;
 }
 
 export interface Check {
@@ -194,6 +196,10 @@ export interface Validation {
   durationMs: number;
   attempts: number;
   runId: string;
+  /** Result of the separate re-test of a failure (run.ts): 'confirmed' or 'cleared'. */
+  recheck?: 'confirmed' | 'cleared';
+  /** What the first, failing attempt reported, when the re-test cleared it. */
+  firstFailure?: string[];
 }
 
 /** Plain-language issue derived from a failing check. */
