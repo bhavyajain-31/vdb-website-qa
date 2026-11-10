@@ -1,19 +1,24 @@
 name: Website QA
+run-name: "Website QA (${{ inputs.mode || 'weekly new cycle' }})"
 
 on:
   workflow_dispatch:
     inputs:
-      fresh:
-        description: 'Start a new testing cycle (ignore saved progress)'
-        type: boolean
-        default: true
+      mode:
+        description: 'What to run'
+        type: choice
+        options:
+          - new-cycle
+          - continue
+          - retest-failed
+        default: new-cycle
   schedule:
-    - cron: '17 2 * * 1'   # Mondays 02:17 UTC (07:47 India time)
+    - cron: '17 2 * * 1'
 
 jobs:
   qa:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,9 +33,15 @@ jobs:
           key: qa-state-${{ github.run_id }}
           restore-keys: qa-state-
       - name: Run QA
-        run: npx tsx src/run.ts ${{ (github.event_name == 'schedule' || inputs.fresh) && '--fresh' || '' }}
         continue-on-error: true
+        run: |
+          case "${{ inputs.mode || 'new-cycle' }}" in
+            new-cycle)     npx tsx src/run.ts --fresh ;;
+            retest-failed) npx tsx src/run.ts --retest-failed ;;
+            *)             npx tsx src/run.ts ;;
+          esac
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: qa-report
           path: reports/latest
