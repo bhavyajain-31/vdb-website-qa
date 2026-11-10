@@ -48,6 +48,8 @@ window.__qaCount = function () {
   return undefined;
 };`;
 
+const assetCache = new Map<string, { headers: Record<string, string>; body: Buffer }>();
+
 export async function launch(cfg: Config): Promise<Browser> {
   return chromium.launch({ headless: cfg.headless, args: ['--disable-dev-shm-usage'] });
 }
@@ -80,6 +82,20 @@ export async function newContext(browser: Browser, cfg: Config, quiet = false): 
     // analytics sandboxes, survey embeds and decorative Lottie animations: never validated, CPU-heavy
     await ctx.route(/\/cdn\/wpm\/|\/web-pixels@|embed\.typeform\.com|lottie-player|\.lottie(\?|$)|lottiefiles/, r => r.abort('blockedbyclient'));
   }
+  // The store's apps (Ring Builder, diamond & gemstone search) load their own scripts/styles through the
+  // Shopify app proxy, which rate-limits per visitor. Download each of those files once and share it between
+  // all test sessions: far fewer proxy requests, and no pages left without their scripts.
+  await ctx.route(u => u.pathname.startsWith('/apps/') && /\.(js|css|svg|png|jpe?g|gif|webp|woff2?|json)$/i.test(u.pathname), async route => {
+    const key = route.request().url();
+    const hit = assetCache.get(key);
+    if (hit) return route.fulfill({ status: 200, headers: hit.headers, body: hit.body });
+    try {
+      const resp = await route.fetch();
+      // only real files: an error page served with 200 (text/html for a .js address) is not kept
+      if (resp.status() === 200 && !/text\/html/i.test(resp.headers()['content-type'] ?? '')) assetCache.set(key, { headers: resp.headers(), body: await resp.body() });
+      return route.fulfill({ response: resp });
+    } catch { return route.fallback(); }
+  });
   ctx.setDefaultTimeout(12_000);
   ctx.setDefaultNavigationTimeout(cfg.navTimeoutMs);
   return ctx;
@@ -87,6 +103,8 @@ export async function newContext(browser: Browser, cfg: Config, quiet = false): 
 
 export interface NavRecord {
   documents: { url: string; status: number }[];
+  /** App-proxy files (scripts, data) the store refused with 429 while the page loaded. */
+  app429: string[];
   imageErrors: Map<string, { status?: number; error?: string }>;
   imageOk: Map<string, number>;
   stop: () => void;
@@ -97,10 +115,11 @@ export function record(page: Page): NavRecord {
   const documents: NavRecord['documents'] = [];
   const imageErrors: NavRecord['imageErrors'] = new Map();
   const imageOk: NavRecord['imageOk'] = new Map();
+  const app429: string[] = [];
   const onResp = (r: Response) => {
     const req = r.request();
     // app API calls answered "429 Too Many Requests": slow every app page load down for a moment
-    if (r.status() === 429 && AppGate.isApp(r.url()) && req.resourceType() !== 'document') gate.apiLimited();
+    if (r.status() === 429 && AppGate.isApp(r.url()) && req.resourceType() !== 'document') { gate.apiLimited(); if (req.resourceType() !== 'image') app429.push(r.url()); }
     if (req.resourceType() === 'document' && req.frame() === page.mainFrame()) documents.push({ url: r.url(), status: r.status() });
     if (req.resourceType() === 'image') {
       if (r.status() >= 400) imageErrors.set(r.url(), { status: r.status() });
@@ -113,7 +132,7 @@ export function record(page: Page): NavRecord {
   };
   page.on('response', onResp);
   page.on('requestfailed', onFail);
-  return { documents, imageErrors, imageOk, stop: () => { page.off('response', onResp); page.off('requestfailed', onFail); } };
+  return { documents, app429, imageErrors, imageOk, stop: () => { page.off('response', onResp); page.off('requestfailed', onFail); } };
 }
 
 export interface GotoResult { status?: number; error?: string; rateLimitedRetries: number }

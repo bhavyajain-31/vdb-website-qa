@@ -23,7 +23,7 @@ export interface State {
   updatedAt: string;
   runs: RunInfo[];
   ids: Record<string, string>;
-  next: { n: number; p?: number };
+  next: { n: number; p?: number; d?: number };
   /** Every visible place on the homepage a link appears (menu, slider slide, footer column …). */
   placements: Placement[];
   placementClicks: Record<string, ClickOutcome>;

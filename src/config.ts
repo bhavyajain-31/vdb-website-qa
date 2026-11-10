@@ -10,8 +10,10 @@ export interface Config {
   maxLinks: number;
   /** Product cards sampled per listing page. */
   cardsPerListing: number;
-  /** Other new links (category links, links on detail pages) taken per page while crawling deeper. */
+  /** Links taken from a product / Ring Builder detail page (one level below the pages opened from the homepage). */
   linksPerPage: number;
+  /** Links (other than product cards) taken from each page opened from the homepage: banners, sliders, CTAs… */
+  linksPerLandingPage: number;
   /** Result modals opened per diamond / gemstone search page. */
   modalsPerSearch: number;
   /** Parallel browser sessions for page tests. */
@@ -59,6 +61,7 @@ const defaults: Config = {
   maxLinks: 400,
   cardsPerListing: 2,
   linksPerPage: 2,
+  linksPerLandingPage: 60,
   modalsPerSearch: 1,
   // ~1.5 browser sessions per CPU core (pages are CPU-heavy), between 2 and 8
   concurrency: Math.max(2, Math.min(8, Math.round(os.cpus().length * 1.5))),
@@ -95,7 +98,8 @@ const defaults: Config = {
     /google-analytics\.com/, /googletagmanager\.com/, /connect\.facebook\.net/, /facebook\.com\/tr/,
     /klaviyo\.com/, /glood\.ai/, /acsbapp\.com/, /shop\.app\//, /otlp-http-production\.shopifysvc\.com/,
     /monorail-edge\.shopifysvc\.com/, /hotjar\.com/, /clarity\.ms/, /doubleclick\.net/, /bat\.bing\.com/,
-    /\/api\/collect/, /\/api\/event\/collect/, /recaptcha/, /gstatic\.com\/recaptcha/,
+    /\/api\/collect/, /\/api\/event\/collect/,
+    // reCAPTCHA is NOT blocked: the Ring Builder now requires a reCAPTCHA token to load its results
   ],
 };
 

@@ -18,7 +18,8 @@ export function malformedReason(raw: string, abs: string | null): string | null 
   const u = new URL(abs);
   if (/https?:\/\//i.test(u.hash) || /https?%3A%2F%2F/i.test(u.hash))
     return `URL is embedded in the fragment ("${u.hash.slice(0, 80)}…"); the browser stays on ${u.origin}${u.pathname}`;
-  if (/https?:\/\/.*https?:\/\//i.test(r)) return 'href contains two URLs';
+  // a second URL in the address part (not inside ?text=… of a share link) means two links were pasted together
+  if (/https?:\/\/.*https?:\/\//i.test(r.split('?')[0])) return 'href contains two URLs';
   if (/\s/.test(r) && !/%20/.test(r)) return 'href contains unescaped whitespace';
   return null;
 }

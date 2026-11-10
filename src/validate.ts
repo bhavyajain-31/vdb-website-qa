@@ -11,11 +11,12 @@ import { botChallenge, dismissPopups, gotoSettled, newContext, record, reloadSet
 import { checkImages } from './images.js';
 import { labelFilterCheck, listingChecks, modalChecks, pageStatus, placeholderCopy, readListing, waitForContent, type ReadyState } from './content.js';
 import { classifyProduct, productChecks } from './products.js';
+import { popupTest } from './popup.js';
 import { measurePerf } from './perf.js';
 import { readAnchors } from './discover.js';
 import { clickTest, CLICK_EXEMPT } from './clicks.js';
 import type { Inventory } from './inventory.js';
-import { classify, diffParams, LISTING_TYPES, malformedReason, samePath, shortUrl, toAbsolute } from './urls.js';
+import { classify, cleanLabel, diffParams, linkKey, LISTING_TYPES, malformedReason, samePath, shortUrl, toAbsolute } from './urls.js';
 import type { Check, ClickOutcome, DiscoveredLink, ListingInfo, Section, Validation } from './types.js';
 
 const PAGE_NAME: Partial<Record<string, string>> = {
@@ -40,8 +41,8 @@ export function seedRefreshSlots(urls: string[]) { for (const u of urls) { try {
 
 export interface Harvest {
   inv: Inventory;
-  /** Called for each newly discovered link, with its click result from this page. */
-  found: (link: DiscoveredLink, click?: ClickOutcome) => void;
+  /** Called for each place found on a page: `link` is set when the URL is new (to be deeplink-tested). */
+  found: (link: DiscoveredLink | null, click?: ClickOutcome, place?: import('./types.js').Placement, target?: DiscoveredLink) => void;
   /** Route to a link as a shopper clicks it, e.g. ["Mega menu", "FINE JEWELRY", "WEDDING BANDS", "Diamond Bands"]. */
   routeOf?: (link: DiscoveredLink) => string[];
 }
@@ -69,7 +70,8 @@ export async function validateLink(browser: Browser, link: DiscoveredLink, cfg: 
     return finish();
   }
   if (link.destType === 'anchor') {
-    checks.push({ name: 'In-page anchor', status: 'SKIPPED', mandatory: true, detail: 'Jumps within the page; covered by the "clickables without a destination" check' });
+    // in-page links: must open a working popup (e.g. CUSTOM DESIGN → "DESIGN YOUR DREAM RING") or jump to a section
+    checks.push(...await popupTest(browser, link, cfg, v, ctxRef));
     return finish();
   }
   if (link.destType === 'external') {
@@ -92,7 +94,11 @@ export async function validateLink(browser: Browser, link: DiscoveredLink, cfg: 
       const gone = /page (isn't|is not) available|this page isn't available|page not found|content isn't available|this account doesn't exist|channel does not exist|sorry, this page/i.test(text + ' ' + v.pageTitle);
       const host = new URL(v.directUrl).host;
       const login = /login|signin|accounts\//i.test(new URL(v.directUrl).pathname);
-      if (s === 404 || s === 410 || s >= 500 || gone) checks.push({ name: 'External link reachable', status: 'FAIL', mandatory: true, detail: `${host} says the page does not exist${s ? ` (HTTP ${s})` : ''}` });
+      // Facebook, Instagram & co. hide pages from visitors who are not logged in, and show automated visitors
+      // (especially from cloud servers such as GitHub's) "This content isn't available". Only a real 404 counts as broken there.
+      const social = /(^|\.)(facebook|instagram|linkedin|twitter|x|tiktok|pinterest|threads)\.(com|net)$/.test(host);
+      if (social && s < 400 && gone) checks.push({ name: 'External link reachable', status: 'PASS', mandatory: true, detail: `Opens ${host} · HTTP ${s}. ${host} hides the page from visitors who are not logged in, so its content could not be read; please confirm by hand if needed` });
+      else if (s === 404 || s === 410 || s >= 500 || gone) checks.push({ name: 'External link reachable', status: 'FAIL', mandatory: true, detail: `${host} says the page does not exist${s ? ` (HTTP ${s})` : ''}` });
       else if (s === 403 || s === 429 || s === 999) checks.push({ name: 'External link reachable', status: 'BLOCKED', mandatory: true, detail: `${host} refused automated visitors (HTTP ${s}); please check it by hand` });
       else checks.push({ name: 'External link reachable', status: 'PASS', mandatory: true, detail: `Opens ${host}${login ? ' (the site asks visitors to log in first)' : ''} · HTTP ${s}` });
     } catch (e) {
@@ -108,6 +114,16 @@ export async function validateLink(browser: Browser, link: DiscoveredLink, cfg: 
   ctxRef.ctx = ctx;
   const page = await ctx.newPage();
   const rec = record(page);
+  // what the store's data services answered (Ring Builder / diamond & gemstone search): explains empty lists
+  const appData: { url: string; total?: number }[] = [];
+  page.on('response', async r => {
+    if (!/ringcreator\.io\/.*\.php|api\.vdbapp\.com|\/apps\/vdb-app\/.*(search|gemstone).*json/i.test(r.url())) return;
+    try {
+      const j = await r.json();
+      const total = typeof j?.total_count === 'number' ? j.total_count : typeof j?.response?.body?.total_diamonds_found === 'number' ? j.response.body.total_diamonds_found : undefined;
+      if (total !== undefined) appData.push({ url: r.url(), total });
+    } catch { /* not JSON */ }
+  });
   try {
     v.product = await classifyProduct(ctx, link, cfg);
     tick('product-json');
@@ -138,7 +154,9 @@ export async function validateLink(browser: Browser, link: DiscoveredLink, cfg: 
 
     const soft = softFailure(link.href, v.directUrl, link.destType, cfg);
     const isLoginLink = /log ?in|sign ?in|account/i.test(link.label) || link.destType === 'login';
-    if (soft === 'Unexpected login redirect' && isLoginLink) {
+    if (isLoginLink && (link.destType === 'login' || /log ?in|sign ?in/i.test(link.label)) && LOGIN_RE.test(v.directUrl)) {
+      checks.push({ name: 'Correct destination', status: 'PASS', mandatory: true, detail: 'Opens the customer login page' });
+    } else if (soft === 'Unexpected login redirect' && isLoginLink) {
       checks.push({ name: 'Correct destination', status: 'BLOCKED', mandatory: true, detail: 'Login-protected page (no test account)' });
     } else if (soft) {
       checks.push({ name: 'Correct destination', status: 'FAIL', mandatory: true, detail: soft });
@@ -272,6 +290,20 @@ export async function validateLink(browser: Browser, link: DiscoveredLink, cfg: 
     }
 
     tick('refresh');
+    const empty = checks.find(c => c.name === 'Results rendered' && c.status === 'FAIL');
+    if (empty && appData.length && appData.every(d => d.total === 0)) {
+      empty.detail = `${empty.detail ?? ''}. The store's data service itself answered "0 results" for this search (${new URL(appData[0].url).host}), so the page correctly shows none: the problem is the search data/filters behind this link, not the page`;
+    }
+    // the store refused the page's own app files (HTTP 429): an empty or broken page is then the test's
+    // traffic, not a site bug. Report "couldn't verify" (re-tested later) instead of a failure.
+    if (rec.app429.length) {
+      for (const c of checks) {
+        if (c.mandatory && c.status === 'FAIL' && /^(Results rendered|Content loaded|Detail modal|Refresh|Correct stock number shown|Product loaded|Product has price|Results match filter|Result count)/.test(c.name)) {
+          c.status = 'BLOCKED';
+          c.detail = `${c.detail ?? ''}. Not counted as a failure: the store refused ${rec.app429.length} of the page's own app files with "429 Too Many Requests" while it loaded (caused by the test's traffic)`;
+        }
+      }
+    }
     if (pageStatus(checks) === 'FAIL' || pageStatus(checks) === 'WARN') {
       const rel = `screenshots/${link.id}.jpg`;
       await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
@@ -290,60 +322,82 @@ export async function validateLink(browser: Browser, link: DiscoveredLink, cfg: 
   return finish();
 }
 
-async function harvestLinks(ctx: BrowserContext, page: import('playwright').Page, src: DiscoveredLink, type: DiscoveredLink['destType'], isListing: boolean, cfg: Config, h: Harvest) {
+/**
+ * Links on a page opened from the homepage. Every visible link in the page's main content is recorded with its
+ * position (route from the homepage + section on this page) and click-tested right here; new URLs are queued for
+ * their own deeplink test. Product cards are sampled (cardsPerListing) and one "next page" link is taken.
+ * On product / Ring Builder detail pages one level further, only the first few links are taken (linksPerPage).
+ */
+async function harvestLinks(ctx: BrowserContext, page: import('playwright').Page, src: DiscoveredLink, type: DiscoveredLink['destType'], _isListing: boolean, cfg: Config, h: Harvest) {
   const depth = src.depth + 1;
   if (depth > cfg.maxDepth) return;
-  const fromListing = src.depth === 0 && isListing;
+  const fromLanding = src.depth === 0 && type !== 'home';
   const fromDetail = src.depth === 1 && (type === 'product' || type === 'rb-details');
-  if (!fromListing && !fromDetail) return;
+  if (!fromLanding && !fromDetail) return;
   // the page may have been reloaded for the refresh check: wait for its content again
   await waitForContent(page, type, cfg);
+  await scrollThrough(page);
+  await dismissPopups(page);
   const anchors = await readAnchors(page, 'main');
-  const fresh: DiscoveredLink[] = [];
-  let cards = 0, pagers = 0, others = 0;
-  const srcPath = new URL(page.url()).pathname;
+  const srcUrl = page.url();
+  const srcPath = new URL(srcUrl).pathname;
   const srcName = (src.label && src.label !== '(no text)' ? src.label : (await page.title().catch(() => '')).split(/\s[–|-]\s/)[0]).slice(0, 50);
+  const route = h.routeOf?.(src) ?? [`${PAGE_NAME[type] ?? 'Page'}: "${srcName}"`];
+  const cardHrefs = new Set<string>();
+  let pagers = 0, others = 0;
+  const newPlaces: { link: DiscoveredLink; place: import('./types.js').Placement; isNew: boolean }[] = [];
   for (const a of anchors) {
-    const abs = toAbsolute(a.rawHref, page.url());
+    if (!a.visible && !a.inSlide) continue;
+    const abs = toAbsolute(a.rawHref, srcUrl);
     const t = classify(a.rawHref, abs, cfg);
     const isCard = t === 'product' || t === 'rb-details';
     const isPager = /[?&]page=\d+/.test(a.rawHref);
-    // filter chips ("Clear", "Remove …") and links back to the same listing are not destinations
-    if (!isPager && abs && new URL(abs).pathname === srcPath) continue;
+    // filter chips / sort options ("Clear", "Remove …", ?filter.…, ?sort_by=…) are not destinations
     if (/^(clear|clear all|remove|reset)\b/i.test(a.label)) continue;
+    // script-only controls (javascript:…) are app buttons (shape/colour filters, steps), not links
+    if (/^\s*javascript:/i.test(a.rawHref)) continue;
+    // "share this item" buttons (WhatsApp, Facebook, X, Pinterest, email): one per result, not site links
+    if (/api\.whatsapp\.com\/send|wa\.me\/\?|facebook\.com\/sharer|twitter\.com\/intent|x\.com\/intent|pinterest\.[a-z.]+\/pin\/create|^mailto:\?/i.test(a.rawHref)) continue;
+    // in-page links (#…) are kept on content pages (tabs such as DEMO CENTER's "01 Ring Creator", popups);
+    // on search / Ring Builder / collection pages they are the app's own filter and sort controls
+    if (t === 'anchor' && type !== 'page' && type !== 'policy') continue;
+    if (abs && !isPager && new URL(abs).pathname === srcPath && /[?&](filter\.|sort_by=)/.test(a.rawHref)) continue;
     let section: Section;
-    if (fromListing) {
+    if (fromLanding) {
       section = isCard || isPager ? (type === 'search' ? 'search' : 'plp') : 'category';
-      if (isCard) {
-        if (cards >= cfg.cardsPerListing) continue;
+      if (isCard && !cardHrefs.has(a.rawHref)) {
+        if (cardHrefs.size >= cfg.cardsPerListing) continue;
         // listings of the same app page with different filters show largely the same items
         const pathKey = 'cards|' + srcPath;
         if ((cardsPerPath.get(pathKey) ?? 0) >= cfg.cardsPerListing * 3) continue;
+        cardHrefs.add(a.rawHref);
+        cardsPerPath.set(pathKey, (cardsPerPath.get(pathKey) ?? 0) + 1);
       }
-      else if (isPager) { if (pagers >= 1) continue; }
-      else if (!LISTING_TYPES.includes(t) || others >= cfg.linksPerPage) continue;
+      else if (isPager) { if (pagers >= 1) continue; pagers++; }
+      else if (others >= cfg.linksPerLandingPage) continue;
     } else {
       section = 'pdp';
       if (t === 'anchor' || others >= cfg.linksPerPage) continue;
     }
     const label = isPager && /^\d+$/.test(a.label.trim()) ? `Page ${a.label.trim()}` : a.label;
-    // route a shopper follows to reach this link: where the page's own link sits, the CTA clicked, then the spot on that page
-    const route = h.routeOf?.(src) ?? [`${PAGE_NAME[type] ?? 'Page'}: ${srcName}`];
-    const spot = isCard ? `product card ${cards + 1}` : isPager ? 'pagination' : fromListing ? 'category link on the page' : 'button/link on the page';
-    const position = [...route, spot];
-    const added = h.inv.add({ ...a, label, section, position }, page.url(), depth, { kind: 'none' });
-    if (added) {
-      fresh.push(added);
-      if (isCard) { cards++; cardsPerPath.set('cards|' + srcPath, (cardsPerPath.get('cards|' + srcPath) ?? 0) + 1); }
-      else if (isPager) pagers++; else others++;
-    }
+    // position: the route a shopper follows from the homepage, then where the link sits on this page
+    const onPage = a.position && a.position.length > 1 ? a.position.slice(1) : [isCard ? 'product card' : isPager ? 'pagination' : 'link on the page'];
+    const position = [...route, ...onPage];
+    const added = h.inv.add({ ...a, label, section, position }, srcUrl, depth, { kind: 'none' });
+    const place = h.inv.lastPlacement;
+    const link = added ?? h.inv.get(linkKey(t, abs, srcUrl, a.rawHref, cleanLabel(label), cfg));
+    if (!added && !place) continue;
+    if (!isCard && !isPager && place) others++;
+    if (link && place) newPlaces.push({ link, place, isNew: !!added });
+    else if (added) newPlaces.push({ link: added, place: undefined as never, isNew: true });
   }
-  for (const l of fresh) {
+  for (const { link, place, isNew } of newPlaces) {
     let click: ClickOutcome | undefined;
-    if (!CLICK_EXEMPT.has(l.destType)) {
-      try { click = await clickTest(ctx, page, l, cfg); }
+    if (!CLICK_EXEMPT.has(link.destType)) {
+      const target = place ? { ...link, id: place.pid, label: place.label, section: place.section, reveal: place.reveal, rawHref: place.rawHref, sourceUrl: srcUrl, secId: place.secId, nth: place.nth } : link;
+      try { click = await clickTest(ctx, page, target, cfg); }
       catch (e) { click = { checks: [{ name: 'Click from source', status: 'BLOCKED', mandatory: true, detail: (e as Error).message.split('\n')[0] }], at: new Date().toISOString() }; }
     }
-    h.found(l, click);
+    h.found(isNew ? link : null, click, place, link);
   }
 }

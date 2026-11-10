@@ -28,21 +28,23 @@ import { loadState, needsRun, saveState, type State } from './state.js';
 import { pageStatus } from './content.js';
 import { assemble, assemblePlacement } from './results.js';
 import { writeReports, summarize } from './report.js';
-import type { ClickOutcome, DiscoveredLink, LinkResult, RunReport, Validation } from './types.js';
+import type { ClickOutcome, DiscoveredLink, LinkResult, Placement, RunReport, Validation } from './types.js';
 
 type Task = { kind: 'home-clicks'; targets: ClickTarget[] } | { kind: 'validate'; link: DiscoveredLink };
 
 const tag = (s: string) => ({ PASS: 'ok  ', WARN: 'warn', FAIL: 'FAIL', BLOCKED: 'BLKD', PENDING: 'pend', SKIPPED: 'skip' } as Record<string, string>)[s] ?? s;
 
 /** Click-test homepage placements; target.id is the placement id (H001…). */
-async function homeClicks(browser: Browser, targets: ClickTarget[], cfg: Config, st: State, ctxRef: { ctx?: BrowserContext }) {
+async function homeClicks(browser: Browser, targets: ClickTarget[], cfg: Config, st: State, ctxRef: { ctx?: BrowserContext }, pageUrl = cfg.baseUrl) {
   const ctx = await newContext(browser, cfg);
   ctxRef.ctx = ctx;
   const page = await ctx.newPage();
   try {
-    await gotoSettled(page, cfg.baseUrl, cfg);
-    const perf = await measurePerf(page, 'Homepage', 'home', cfg);
-    if (perf) st.homePerf.push(perf);
+    await gotoSettled(page, pageUrl, cfg);
+    if (pageUrl === cfg.baseUrl) {
+      const perf = await measurePerf(page, 'Homepage', 'home', cfg);
+      if (perf) st.homePerf.push(perf);
+    }
     await dismissPopups(page);
     await scrollThrough(page);
     await dismissPopups(page);
@@ -59,7 +61,7 @@ async function homeClicks(browser: Browser, targets: ClickTarget[], cfg: Config,
 
 /** A deeplink's click result: from its homepage placements (worst one wins), or from the page it was found on. */
 function clickFor(st: State, l: DiscoveredLink): ClickOutcome | undefined {
-  if (l.depth === 0) {
+  {
     const outs = st.placements.filter(p => p.key === l.key).map(p => st.placementClicks[p.pid]).filter(Boolean);
     if (outs.length) {
       const rank: Record<string, number> = { FAIL: 0, WARN: 1, BLOCKED: 2, PENDING: 3, PASS: 4, SKIPPED: 5 };
@@ -129,6 +131,7 @@ async function main() {
     const ordered = inv.all().filter(inScope).sort((a, b) => a.depth - b.depth || a.id.localeCompare(b.id));
     // every visible homepage placement is clicked on its own (same URL in menu + slider + footer = 3 clicks)
     const homeTargets: ClickTarget[] = st.placements.flatMap(p => {
+      if ((p.depth ?? 0) !== 0) return []; // places on deeper pages are clicked while their page is tested
       const l = inv.get(p.key);
       if (!l || CLICK_EXEMPT.has(l.destType) || !inScope(l)) return [];
       const c = st.placementClicks[p.pid];
@@ -153,14 +156,17 @@ async function main() {
     let active = 0, done = 0, stoppedReason: string | undefined;
     const harvest = {
       inv,
-      found: (l: DiscoveredLink, click?: ClickOutcome) => {
-        if (click) st.clicks[l.key] = click;
+      found: (l: DiscoveredLink | null, click?: ClickOutcome, place?: Placement, target?: DiscoveredLink) => {
+        if (click) { if (place) st.placementClicks[place.pid] = click; else if (target) st.clicks[target.key] = click; }
         st.links = inv.all();
-        enqueue(l);
+        st.placements = inv.placements();
+        if (l) enqueue(l);
       },
       // the first homepage place of a link (exact CTA text), or the route recorded when it was found deeper
       routeOf: (l: DiscoveredLink) => {
-        const p = st.placements.find(p => p.key === l.key && p.label !== '(no text)') ?? st.placements.find(p => p.key === l.key);
+        // the place the link was found at first (homepage first): its position + the exact text clicked
+        const mine = st.placements.filter(p => p.key === l.key).sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0));
+        const p = mine.find(p => p.label !== '(no text)') ?? mine[0];
         if (p) return [...p.position, `"${p.label}"`];
         return l.position?.length ? [...l.position.slice(0, -1), `${l.position[l.position.length - 1]} "${l.label}"`] : [`"${l.label}"`];
       },
@@ -211,9 +217,13 @@ async function main() {
 
     // ---- re-test every failure on its own, one at a time, before reporting it.
     // Many failures under parallel load are the store being busy (results not loading, popups not opening).
-    const toRecheck = inv.all().filter(l => st.validations[l.key]?.status === 'FAIL' && !st.validations[l.key].recheck);
-    if (toRecheck.length && !interrupted) {
-      console.log(`[recheck] re-testing ${toRecheck.length} failed links one at a time`);
+    const rateLimited = (v?: Validation) => !!v?.checks.some(c => c.status === 'BLOCKED' && /429 Too Many Requests/.test(c.detail ?? ''));
+    const toRecheck = inv.all().filter(l => { const v = st.validations[l.key]; return (v?.status === 'FAIL' || (v?.status === 'BLOCKED' && rateLimited(v))) && !v.recheck; });
+    if (!interrupted) {
+      if (toRecheck.length) console.log(`[recheck] re-testing ${toRecheck.length} failed / rate-limited links one at a time`);
+      // give the store's rate limit a moment to recover before re-testing
+      const emptyList = (v?: Validation) => !!v?.checks.some(c => c.name === 'Results rendered' && c.status === 'FAIL');
+      if (toRecheck.some(l => rateLimited(st.validations[l.key]) || emptyList(st.validations[l.key]))) await new Promise(r => setTimeout(r, 30_000));
       for (const l of toRecheck) {
         if (Date.now() - t0 > budgetMs - reserveMs) break;
         const first = st.validations[l.key];
@@ -221,6 +231,7 @@ async function main() {
         const again = await withTimeout<Validation | null>(cfg.caseTimeoutMs, ctxRef, () => validateLink(browser, l, cfg, runId, null, ctxRef), () => null);
         if (!again) continue;
         const firstFails = first.checks.filter(c => c.mandatory && c.status === 'FAIL').map(c => `${c.name}: ${c.detail ?? ''}`);
+        if (again.status === 'BLOCKED') { again.attempts = first.attempts + 1; st.validations[l.key] = again; continue; }
         if (again.status === 'FAIL') {
           again.recheck = 'confirmed';
           for (const c of again.checks) if (c.mandatory && c.status === 'FAIL') c.detail = `${c.detail ?? ''} (confirmed: failed again when re-tested on its own)`;
@@ -235,10 +246,13 @@ async function main() {
         saveState(cfg, st);
       }
       // homepage clicks that failed: click them again on a fresh homepage
-      const failedClicks = st.placements.filter(p => st.placementClicks[p.pid] && pageStatus(st.placementClicks[p.pid].checks) === 'FAIL');
-      if (failedClicks.length && Date.now() - t0 < budgetMs - reserveMs) {
-        const targets = failedClicks.flatMap(p => { const l = inv.get(p.key); return l ? [{ ...l, id: p.pid, label: p.label, section: p.section, reveal: p.reveal, rawHref: p.rawHref, sourceUrl: cfg.baseUrl, secId: p.secId, nth: p.nth }] : []; });
-        await homeClicks(browser, targets, cfg, st, {});
+      const failedClicks = st.placements.filter(p => st.placementClicks[p.pid] && ['FAIL', 'BLOCKED'].includes(pageStatus(st.placementClicks[p.pid].checks)));
+      const bySource = new Map<string, Placement[]>();
+      for (const p of failedClicks) { const u = p.sourceUrl ?? cfg.baseUrl; bySource.set(u, [...(bySource.get(u) ?? []), p]); }
+      for (const [u, ps] of bySource) {
+        if (Date.now() - t0 > budgetMs - reserveMs) break;
+        const targets = ps.flatMap(p => { const l = inv.get(p.key); return l ? [{ ...l, id: p.pid, label: p.label, section: p.section, reveal: p.reveal, rawHref: p.rawHref, sourceUrl: u, secId: p.secId, nth: p.nth }] : []; });
+        await homeClicks(browser, targets, cfg, st, {}, u).catch(() => {});
       }
     }
 

@@ -44,7 +44,10 @@ export async function readAnchors(page: Page, rootSel: string, forced?: Section)
     const CARD = '.card-wrapper, .card, .vdb-rb-list-product-item, [data-prids]';
     const HEAD = '.card__heading, .vdb-rb-product-name, .product-card__title, h3, h2';
     const label = (a: HTMLAnchorElement) => {
-      const own = (a.innerText || a.getAttribute('aria-label') || a.title || a.querySelector('img')?.alt || '').replace(/\s+/g, ' ').trim();
+      // a link wrapping a whole card ("VDB Supplier Inventory\nComes with every plan…") is named by its first line
+      const raw0 = a.innerText || a.getAttribute('aria-label') || a.title || a.querySelector('img')?.alt || '';
+      const lines = raw0.split('\n').map(x => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
+      const own = (lines.length > 1 && lines.join(' ').length > 40 ? lines[0] : lines.join(' ')).trim();
       // product cards: swatch / image links carry variant handles or nothing; the card heading is the real name
       const card = a.closest(CARD);
       const head = card?.querySelector(HEAD) as HTMLElement | null;
@@ -62,10 +65,12 @@ export async function readAnchors(page: Page, rootSel: string, forced?: Section)
     const secName = (sec: Element) => {
       const id = sec.id || '';
       if (/slideshow/i.test(id)) return 'Hero section';
-      const h = [...sec.querySelectorAll('h1, h2, h3, .banner__heading, .title')].find(x => norm((x as HTMLElement).innerText)) as HTMLElement | undefined;
+      // the section's own heading: not a slide/card title and not a filter panel label
+      const h = [...sec.querySelectorAll('h1, h2, h3, .banner__heading, .title')].find(x => norm((x as HTMLElement).innerText)
+        && !x.closest(SLIDE + ', .card-wrapper, .card, .grid__item, form, .facets, [class*="facet"], [class*="filter"]')) as HTMLElement | undefined;
       const ht = norm(h?.innerText).slice(0, 50);
       if (ht) return ht;
-      const type = id.split('__').pop()!.replace(/_[A-Za-z0-9]{6}$/, '').replace(/^index_/, '').replace(/_\d*$/, '').replace(/_/g, ' ').trim();
+      const type = id.split('__').pop()!.replace(/_[A-Za-z0-9]{6}$/, '').replace(/^index_/, '').replace(/_\d*$/, '').replace(/[_-]/g, ' ').trim();
       return tc(type);
     };
     const groupLabel = (a: Element, stop: Element | null, own: string) => {
@@ -118,6 +123,7 @@ export async function readAnchors(page: Page, rootSel: string, forced?: Section)
         const box = slide.parentElement!;
         const boxes = shop ? [...new Set([...shop.querySelectorAll(SLIDE)].map(x => x.parentElement))] : [box];
         if (boxes.length > 1) parts.push(/bottom|thumb|mini|nav/i.test(slide.className + ' ' + box.className) ? 'Mini slider' : 'Main slider');
+        else if (!/slider|slideshow|carousel/i.test(parts[parts.length - 1])) parts.push('Slider');
         const sibs = [...box.children].filter(x => x.matches(SLIDE) && !x.matches(DUP));
         const idx = Number(slide.getAttribute('data-swiper-slide-index') ?? slide.getAttribute('data-slick-index') ?? sibs.indexOf(slide));
         const isCard = !!slide.querySelector('.card-wrapper, .card, [data-prids]');

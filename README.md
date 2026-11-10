@@ -67,6 +67,47 @@ Measured on the live store (228 links, 2,235 images found, 1,563 tested):
 
 The number of parallel browser sessions is set automatically: about 1.5 per CPU core, between 2 and 8. Override it with `--concurrency`.
 
+## Web front end (Streamlit)
+
+`streamlit_app.py` is a web page where anyone can start a test, watch it and read the report, without GitHub or a terminal. The heavy work keeps running on **GitHub Actions** (a real Chrome needs a proper machine). The Streamlit page only starts runs and shows the reports.
+
+**One-time setup (about 10 min)**
+
+1. **Create a GitHub token for the page.**
+   1. Go to GitHub → *Settings* → *Developer settings* → *Personal access tokens* → **Fine-grained tokens** → *Generate new token*.
+   2. Under **Repository access**, choose *Only select repositories* and pick this repository.
+   3. Under **Permissions**, set *Actions: **Read and write*** and *Contents: **Read-only***. Metadata is read-only automatically.
+   4. Click *Generate* and copy the token.
+2. **Deploy the page.**
+   1. Go to [share.streamlit.io](https://share.streamlit.io), sign in with GitHub and click **Create app**.
+   2. Pick this repository, branch `main`, and main file `streamlit_app.py`.
+   3. Under **Advanced settings → Secrets**, paste:
+
+      ```toml
+      GITHUB_REPO   = "your-org/vdb-website-qa"   # owner/repository
+      GITHUB_TOKEN  = "github_pat_…"              # the token from step 1
+      APP_PASSWORD  = "choose-a-password"          # optional: asks visitors for a password
+      # GITHUB_BRANCH = "main"     WORKFLOW_FILE = "qa.yml"   (defaults)
+      ```
+
+   4. Click **Deploy** and share the page's link with your team.
+
+**Using it**
+
+- Pick *Test everything*, *Continue the previous cycle* or *Re-test only the failures*, then click **Start test**.
+- The run list refreshes every 20 seconds and shows progress. You can close the page; the test keeps running on GitHub.
+- When it finishes, the newest report opens automatically. Older runs have a **View report** button.
+- Download buttons give the dashboard, the CSVs and the full report zip.
+
+**Running on your own server instead** (no GitHub Actions): install Node.js 20+, run `npm install && npm run setup`, then:
+
+```bash
+pip install -r requirements.txt
+QA_MODE=local streamlit run streamlit_app.py
+```
+
+**Start test** then runs the tool on that machine and shows its live log.
+
 ## 3. Configuration
 
 Settings are read from `qa.config.json`; command-line options override them.
@@ -78,6 +119,7 @@ Settings are read from `qa.config.json`; command-line options override them.
 | `maxDepth` | `--depth` | `2` | 0 homepage links · 1 + product cards on listing pages · 2 + links on product/detail pages |
 | `maxLinks` | `--max-links` | `400` | Cap on unique links tested |
 | `cardsPerListing` | `--cards` | `2` | Product cards sampled per listing page |
+| `linksPerLandingPage` | – | `60` | Links (other than product cards) clicked on each page opened from the homepage |
 | `modalsPerSearch` | `--modals` | `1` | Diamond/gemstone result popups opened per search page |
 | `concurrency` | `--concurrency` | auto | Parallel browser sessions |
 | `appConcurrency` | `--app-concurrency` | `3` | Parallel loads of app pages (`/apps/...`). Keeps Shopify's app proxy from answering "429 Too Many Requests" |

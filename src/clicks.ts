@@ -8,7 +8,7 @@
  */
 import type { BrowserContext, Page, Route, Request } from 'playwright';
 import type { Config } from './config.js';
-import { dismissPopups, gotoSettled } from './browser.js';
+import { botChallenge, dismissPopups, gotoSettled } from './browser.js';
 import { diffParams, samePath, shortUrl } from './urls.js';
 import type { Check, ClickOutcome, DiscoveredLink } from './types.js';
 
@@ -16,6 +16,7 @@ const NEXT_SEL = '.slider-button--next, .swiper-button-next, .slick-next, [aria-
 const UI = '[role="dialog"], [aria-modal="true"], cart-drawer, .drawer, .cart-drawer, .menu-drawer, .search-modal, details[open] > div';
 
 // external links are clicked too (the new tab is intercepted); their site is checked by validate.ts
+// in-page links (#…, e.g. CUSTOM DESIGN) are tested by popup.ts instead
 export const CLICK_EXEMPT = new Set(['mailto', 'tel', 'anchor']);
 
 async function shoot(page: Page, cfg: Config, name: string): Promise<string | undefined> {
@@ -184,6 +185,17 @@ export async function clickTest(ctx: BrowserContext, page: Page, link: ClickTarg
   const at = new Date().toISOString();
   const malformed = link.destType === 'malformed';
   let a = await attemptClick(ctx, page, link);
+  if (a.error) {
+    // the page may have changed under us (a bot-protection check page, or a script replaced the content):
+    // load the source page again once and retry
+    const challenge = await botChallenge(page);
+    if (challenge) await page.waitForTimeout(10_000);
+    await gotoSettled(page, link.sourceUrl, cfg);
+    await dismissPopups(page);
+    const again = await attemptClick(ctx, page, link);
+    if (!again.error) a = again;
+    else if (await botChallenge(page)) a = { ...again, error: `The store's bot protection ("${challenge ?? 'security check'}") replaced the page during the test, so this could not be clicked` };
+  }
   if (a.error) {
     checks.push({ name: 'Click from source', status: 'BLOCKED', mandatory: true, detail: a.error });
     return { checks, at };

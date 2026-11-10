@@ -5,6 +5,7 @@
   "maxDepth": 2,
   "maxLinks": 400,
   "cardsPerListing": 2,
+  "linksPerLandingPage": 60,
   "modalsPerSearch": 1,
   "appConcurrency": 3,
   "refreshPerPage": 3,

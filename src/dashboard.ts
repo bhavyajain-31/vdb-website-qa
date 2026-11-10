@@ -24,7 +24,7 @@ export function renderDashboard(r: RunReport, cfg: Config): string {
     runs: r.runs, cfg: r.config, sum, areas: AREAS, types: PAGE_TYPES, perfCfg: cfg.perf,
     links: r.links.map(l => ({
       id: l.id, s: l.status, label: l.label, sec: l.section, dt: l.destType, depth: l.depth, pos: l.position ?? [],
-      places: (r.placements ?? []).filter(p => p.key === l.key).map(p => ({ pid: p.pid, pos: p.position, s: p.status, label: p.label, issues: p.issues, reasons: p.reasons, click: short(p.clickUrl) })),
+      places: (r.placements ?? []).filter(p => p.key === l.key).map(p => ({ pid: p.pid, pos: p.position, s: p.status, label: p.label, issues: p.issues, reasons: p.reasons, click: short(p.clickUrl), dep: p.depth ?? 0, from: short(p.sourceUrl) })),
       src: short(l.sourceUrl), href: short(l.href), raw: l.rawHref, click: short(l.clickUrl), direct: short(l.directUrl), http: l.directHttpStatus,
       chain: l.redirectChain, issues: l.issues, reasons: l.failureReasons,
       checks: l.checks.map(c => ({ n: c.name, s: c.status, d: c.detail, m: c.mandatory })),
@@ -40,7 +40,7 @@ export function renderDashboard(r: RunReport, cfg: Config): string {
     })),
     comps: r.scenarios.map(s => ({ id: s.id, name: s.name, kind: s.kind, s: s.status, sev: componentSeverity(s), steps: s.steps.map(t => ({ ...t, url: short(t.url) })), why: s.failureReasons, shot: s.screenshot })),
     dead: r.deadClickables.map(d => ({ ...d, sourceUrl: short(d.sourceUrl) })),
-    places: (r.placements ?? []).map(p => ({
+    places: (r.placements ?? []).filter(p => (p.depth ?? 0) === 0).map(p => ({
       pid: p.pid, s: p.status, pos: p.position, label: p.label, href: short(p.href), dt: p.destType, click: short(p.clickUrl),
       cd: p.clickChecks.map(c => c.detail).filter(Boolean).join('; '), dest: p.destStatus, linkId: p.linkId, vis: p.visibleAtLoad,
       reasons: p.reasons, sev: p.issues[0]?.severity,
@@ -403,7 +403,7 @@ var linkById = {}; D.links.forEach(function(l){ linkById[l.id] = l; });
 // links found deeper (product cards, links on product pages) get one row each with their route
 var ROWS = [];
 D.links.forEach(function(l){
-  if (l.places.length) l.places.forEach(function(p){ ROWS.push(Object.assign({}, l, { rid: p.pid, s: p.s, label: p.label, pos: p.pos, issues: p.issues, reasons: p.reasons, click: p.click || l.click, where: p.pos[0] })); });
+  if (l.places.length) l.places.forEach(function(p){ ROWS.push(Object.assign({}, l, { rid: p.pid, s: p.s, label: p.label, pos: p.pos, issues: p.issues, reasons: p.reasons, click: p.click || l.click, where: p.dep ? 'Deeper pages' : p.pos[0], from: p.from })); });
   else ROWS.push(Object.assign({}, l, { rid: l.id, where: l.depth === 0 ? 'Homepage' : 'Deeper pages' }));
 });
 (function(){
@@ -412,7 +412,7 @@ D.links.forEach(function(l){
     '<div class="controls" id="lfStatus"></div><div class="controls"><select id="lfArea" aria-label="Where the link was found"></select><select id="lfType" aria-label="Product type"></select><input type="search" id="lfQ" placeholder="Find by name, URL, stock number…" aria-label="Find a link"><a class="btn" href="deeplinks.csv" download>Download CSV</a></div>' +
     '<div class="panel tbl"><table><thead><tr><th>Result</th><th>Link</th><th class="hide-s">Position</th><th>Link URL &amp; expected page</th><th>What actually happened</th><th>Reason</th><th class="num hide-s">Ready</th></tr></thead><tbody id="lfBody"></tbody></table></div>';
   var areaSel = document.getElementById('lfArea');
-  areaSel.innerHTML = '<option value="all">Anywhere</option>' + ['Header','Mega menu','Homepage','Footer','Deeper pages'].map(function(a){ var n = ROWS.filter(function(r){ return r.where===a; }).length; return n ? '<option value="' + e(a) + '">' + e(a === 'Deeper pages' ? 'Listing & product pages' : a) + ' (' + n + ')</option>' : ''; }).join('');
+  areaSel.innerHTML = '<option value="all">Anywhere</option>' + ['Header','Mega menu','Homepage','Footer','Deeper pages'].map(function(a){ var n = ROWS.filter(function(r){ return r.where===a; }).length; return n ? '<option value="' + e(a) + '">' + e(a === 'Deeper pages' ? 'Pages opened from the homepage' : a) + ' (' + n + ')</option>' : ''; }).join('');
   var kinds = {}; D.links.forEach(function(l){ var k = l.prod ? l.prod.kl : (D.types[l.dt]||l.dt); kinds[k] = (kinds[k]||0)+1; });
   var typeSel = document.getElementById('lfType');
   typeSel.innerHTML = '<option value="all">Any page type</option>' + Object.keys(kinds).sort().map(function(k){ return '<option value="' + e(k) + '">' + e(k) + ' (' + kinds[k] + ')</option>'; }).join('');

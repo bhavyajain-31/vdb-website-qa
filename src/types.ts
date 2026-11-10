@@ -71,6 +71,10 @@ export interface Placement {
   visibleAtLoad: boolean;
   /** Card/slide/menu item the link belongs to (several CTAs can share one). */
   group?: string;
+  /** Page the place is on (the homepage, or a page opened from it). */
+  sourceUrl?: string;
+  /** 0 = on the homepage, 1 = on a page opened from the homepage, 2 = one level further. */
+  depth?: number;
 }
 
 export interface Check {

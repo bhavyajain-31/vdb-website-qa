@@ -8,12 +8,12 @@ This page explains **what the tool covers**, **how each check works** and **how 
 
 | Area | What is tested |
 | --- | --- |
-| **Header** | Announcement bar links, logo, top menu links, icons (wishlist, cart) |
+| **Header** | Announcement bar links, logo, top menu links, icons (wishlist, cart), and **CUSTOM DESIGN**: its "DESIGN YOUR DREAM RING" popup must open, show its text, images and START DESIGNING button, move on when that button is clicked, and close with × |
 | **Mega menu** | Every top item is hovered. Every link and every icon or image in each open panel is tested. |
 | **Homepage sections** | Hero section (main slider and mini slider), product sliders, "Diamonds Shape", "Shop By Collection", "Fine Jewelry" banners, "Discover Our Tennis Necklaces", "Shop By Color", the About banner and any other section with links |
 | **Footer** | Every link in every column, social icons and policy links |
 | **External links** | Social icons and any link to another website, opened in a real browser |
-| **Listing pages** | Collections, diamond search, gemstone search, Ring Builder lists. Two product cards per listing are followed, plus the next-page link and up to two category links. |
+| **Every page opened from the homepage** | Each page a homepage link opens (collections, DEMO CENTER, diamond/gemstone search, Ring Builder lists, About…) is crawled too. **Every visible link in its main content is recorded and clicked**: hero buttons such as SHOP ALL, collection sliders (e.g. Necklaces, Halo Studs… under the Hoop Earrings banner), tabs (e.g. 01 Ring Creator on DEMO CENTER), cards and CTAs. Every new URL found there gets its own deeplink test. Product cards are sampled (two per listing) plus the next-page link. The header and footer are the same on every page and are covered on the homepage. |
 | **Product / detail pages** | Shopify products, the VDB ring configurator, and Ring Builder setting and stone pages. Up to two links per detail page are followed, for example "Select Setting". |
 | **Images** | Every image on every tested page, plus mega-menu icons of any size |
 | **Page speed** | Homepage and every tested page |
@@ -44,11 +44,13 @@ Every visible link on the homepage is recorded **once per place it appears**, wi
 
 - **Same URL in several places.** When the same URL appears in several places (for example SHOP NECKLACES in two sections), each place gets its own row and its own click test. The page behind the URL is opened and checked once, and that result is shown on every row.
 - **Image links.** An image link and a text link inside the same card or menu item are one place; the text is used as the name.
-- **Links on deeper pages.** Product cards and links on product pages show the **route a shopper takes from the homepage**, for example:
+- **Links on pages opened from the homepage** show the **route a shopper takes from the homepage**, then where the link sits on that page, for example:
 
-  `Mega menu › FINE JEWELRY › WEDDING BANDS › "Diamond Bands" › product card 1`
+  `Mega menu › FINE JEWELRY › DIAMOND EARRINGS › "Hoop Earrings" › Hoop Earrings › Slider › slide 9 of 12` (text: **Halo Studs**)
 
-  This reads: open the mega menu, go to FINE JEWELRY, click "Diamond Bands" under WEDDING BANDS, then click the first product card on that page.
+  `Footer › FINE JEWELRY › "DEMO CENTER" › Sales Demo Center` (text: **01 Ring Creator**)
+
+  This reads: open the mega menu, go to FINE JEWELRY, click "Hoop Earrings" under DIAMOND EARRINGS, then on that page click "Halo Studs" in the slider.
 
 ---
 
@@ -102,12 +104,27 @@ The URL is opened **directly in a brand-new browser**, like someone opening a sh
 | 10 | Refresh | On app result pages (Ring Builder, diamond and gemstone search), reloading shows the same number of results. Three pages per page type are tested. | Results disappear or change on reload. If a second reload works, it is reported as minor and intermittent. |
 | 11 | Speed | The time until the main content is visible is recorded | Main content takes longer than 6 s, re-measured on its own to confirm. This is a performance issue. |
 
+**In-page links** (`href="#…"`, like CUSTOM DESIGN or the DEMO CENTER tabs) do not open a new page, so they are checked by clicking them on their page:
+
+- **Popup:**
+  - it must open;
+  - it must show content (a heading and a button);
+  - its images must load and display;
+  - a "Start…/Next" button must move on to the next step (nothing is submitted);
+  - it must close with its × button.
+- **Tab or jump:** the visible content must change, or the page must scroll to the section.
+- **Fails** when nothing happens at all.
+
 **External links** (social icons and other websites) are opened in a real browser:
 
 - **Passes** when the site opens.
 - **Fails** when the site returns 404 or 500, or shows "page not available" or "channel does not exist".
 
-Facebook and Instagram send automated visitors to their login page. In that case the tool can confirm the link opens the right site, but not that the profile itself still exists.
+Social sites (Facebook, Instagram, LinkedIn, X, TikTok, Pinterest) hide pages from visitors who are not logged in. From cloud servers such as GitHub's, Facebook even shows "This content isn't available" for pages that exist. For these sites:
+
+- Only a real "not found" (HTTP 404/410) counts as broken.
+- If the site answers normally, the link **passes**, with a note that the page content could not be read.
+- If the site refuses automated visitors ("too many requests"), the link shows as **couldn't verify**; check it by hand.
 
 **Template / placeholder text** ("This is a placeholder text…") is accepted on this store. It is recorded for information only and never counts as a warning or failure.
 
@@ -124,7 +141,11 @@ On top of that, while testing:
 
 - requests to the store's apps (`/apps/…`) are spaced out;
 - on "429 Too Many Requests" every app request pauses briefly and is retried;
-- a bot-protection page ("Performing security verification") is reported as "Couldn't verify", never as a site failure.
+- a bot-protection page ("Performing security verification") is reported as "Couldn't verify", never as a site failure;
+- the store's apps load their own scripts through the same rate-limited app proxy. The tool downloads each of those files **once** and shares it between all its browser sessions, so the proxy is not flooded.
+- If the store still refuses a page's own app files ("429 Too Many Requests") and the page then shows nothing, the result is **Couldn't verify** (re-tested after a 30-second pause), not Failed.
+- **Empty result lists are explained.** The tool reads what the store's data service (Ring Builder / VDB search API) answered. If the service itself returned "0 results" for that search, the report says so: the page is fine, and the search data or filters behind the link are the problem. This happens intermittently with *Start with Setting* (`rb-setting-list?in_journey=true`).
+- **"Share this item" buttons** (WhatsApp, Facebook, X, Pinterest, email share on each diamond) are not counted as site links.
 
 ---
 
@@ -195,7 +216,22 @@ During the parallel run, times are inflated, so they are marked **(busy)**. Page
 
 ---
 
-## 7. Speed and resuming
+## 7. Run time, time budget and "Not run yet"
+
+- **Time budget.** A run stops **starting new tests** after `timeBudgetMin` minutes (default **23**). The tests already running finish, and the run keeps time at the end for:
+  - re-testing failures alone (up to about 5 minutes, depending on how many failed);
+  - re-measuring slow pages;
+  - writing the report.
+
+  So **one run always ends at about 23–25 minutes**, however big the site is.
+- **"Not run yet".** If the budget is reached before every link is tested, the remaining links show as *Not run yet – the time budget was reached, it runs first next time*. Nothing is lost: run the tool again with **Continue** (`npm run qa`). It skips everything already tested and starts with these links.
+- **Typical turnaround on the live store:**
+  - **On GitHub:** one run tests about 220 links and their pages in about 20 minutes. Your 5 Nov run tested 222 links in 20.4 min and left 3 for the next run.
+  - **With the wider crawl** (every link on pages opened from the homepage) there are more places to click, but few new URLs. Expect one run plus a short "continue" run of 5–10 min for a complete cycle.
+  - **A 2-CPU machine** needs 2–3 runs.
+- To finish in **one** run on a slower machine, raise the budget (`--budget 45`, or `timeBudgetMin` in `qa.config.json`; GitHub allows up to 45 min in the workflow), or lower `cardsPerListing`.
+
+## 8. Speed and resuming
 
 - One browser session runs per 1.5 CPU cores, capped at 8. App pages are limited to 3 at a time.
 - A run stops starting new tests after **23 minutes**, keeping time at the end for the re-test of failures and the report.

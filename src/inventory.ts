@@ -11,9 +11,9 @@ import type { DiscoveredLink, Placement, Reveal } from './types.js';
 export class Inventory {
   private byKey = new Map<string, DiscoveredLink>();
   private bySlot = new Map<string, Placement>();
-  constructor(private cfg: Config, private ids: Record<string, string>, private next: { n: number; p?: number }) {}
+  constructor(private cfg: Config, private ids: Record<string, string>, private next: { n: number; p?: number; d?: number }) {}
 
-  static from(cfg: Config, links: DiscoveredLink[], ids: Record<string, string>, next: { n: number; p?: number }, placements: Placement[] = []): Inventory {
+  static from(cfg: Config, links: DiscoveredLink[], ids: Record<string, string>, next: { n: number; p?: number; d?: number }, placements: Placement[] = []): Inventory {
     const inv = new Inventory(cfg, ids, next);
     for (const l of links) inv.byKey.set(l.key, l);
     for (const p of placements) inv.bySlot.set('P|' + p.pid, p);
@@ -33,19 +33,32 @@ export class Inventory {
   resetPlacements() { this.bySlot.clear(); }
 
   /** Record one visible place on the homepage where a link appears. */
-  private place(a: RawAnchor, key: string, label: string, reveal: Reveal) {
+  /** Placement made by the last add() call (null when the place was already known or not visible). */
+  lastPlacement: Placement | null = null;
+
+  private place(a: RawAnchor, key: string, label: string, reveal: Reveal, sourceUrl: string, depth: number) {
+    this.lastPlacement = null;
     if (!a.slot) return;
     const shown = a.visible || a.inSlide || reveal.kind === 'menu' || reveal.kind === 'drawer';
     if (!shown) return;
-    const slotKey = 'S|' + a.slot + '|' + label;
-    if (!this.ids[slotKey]) { this.next.p = (this.next.p ?? 0) + 1; this.ids[slotKey] = `H${String(this.next.p).padStart(3, '0')}`; }
+    // homepage places: H001…; places on pages opened from the homepage: P0001… (scoped to that page)
+    const home = depth === 0;
+    let page = '';
+    if (!home) { try { page = new URL(sourceUrl).pathname + new URL(sourceUrl).search; } catch { page = sourceUrl; } }
+    const slotKey = (home ? 'S|' : 'D|' + page + '|') + a.slot + '|' + label;
+    if (!this.ids[slotKey]) {
+      if (home) { this.next.p = (this.next.p ?? 0) + 1; this.ids[slotKey] = `H${String(this.next.p).padStart(3, '0')}`; }
+      else { this.next.d = (this.next.d ?? 0) + 1; this.ids[slotKey] = `P${String(this.next.d).padStart(4, '0')}`; }
+    }
     const pid = this.ids[slotKey];
-    const existing = this.bySlot.get('P|' + pid);
-    if (existing) return;
-    this.bySlot.set('P|' + pid, {
+    if (this.bySlot.get('P|' + pid)) return;
+    const pl: Placement = {
       pid, key, position: a.position ?? [], section: a.section, label, rawHref: a.rawHref, reveal,
-      secId: a.secId, nth: a.nth, visibleAtLoad: a.visible && reveal.kind === 'none', group: a.slot,
-    });
+      secId: a.secId, nth: a.nth, visibleAtLoad: a.visible && reveal.kind === 'none', group: (home ? '' : page + '|') + a.slot,
+      sourceUrl, depth,
+    };
+    this.bySlot.set('P|' + pid, pl);
+    this.lastPlacement = pl;
   }
 
   private idFor(key: string): string {
@@ -61,7 +74,7 @@ export class Inventory {
     const destType = classify(a.rawHref, abs, this.cfg);
     const label = cleanLabel(a.label || '');
     const key = linkKey(destType, abs, sourceUrl, a.rawHref, label, this.cfg);
-    if (depth === 0) this.place(a, key, label, reveal);
+    this.place(a, key, label, reveal, sourceUrl, depth);
     const existing = this.byKey.get(key);
     if (existing) {
       existing.alsoFoundIn ??= [];

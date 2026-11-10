@@ -126,6 +126,26 @@ const RULES: Record<string, Rule> = {
     explain: d => /nothing rendered/i.test(d) ? 'After refreshing the page, its results disappear.' : `Refreshing the page changes what it shows (${d}).`,
     fix: 'Make the page render the same results on reload.', owner: 'Developer',
   },
+  'Popup opens': {
+    severity: 'critical', title: 'Popup does not open',
+    explain: () => 'Clicking it should open a popup (or jump to a section), but nothing happens.', fix: 'Check the popup script/embed (e.g. the Typeform snippet) on this page.', owner: 'Developer',
+  },
+  'Popup content': {
+    severity: 'critical', title: 'Popup is empty',
+    explain: d => `The popup opens but its content did not load. ${d}`, fix: 'Check the popup source (e.g. the Typeform form) is published and reachable.', owner: 'Developer',
+  },
+  'Popup images': {
+    severity: 'critical', title: 'Broken image in popup',
+    explain: d => `An image inside the popup does not load: ${d}`, fix: 'Re-upload the image in the popup/form editor.', owner: 'Store admin / content',
+  },
+  'Popup button works': {
+    severity: 'critical', title: 'Popup button does nothing',
+    explain: d => d, fix: 'Check the form/popup flow in its editor.', owner: 'Developer',
+  },
+  'Popup closes': {
+    severity: 'minor', title: 'Popup cannot be closed',
+    explain: d => d, fix: 'Make sure the popup has a working close (×) button.', owner: 'Developer',
+  },
   'Placeholder text': {
     severity: 'minor', title: 'Template placeholder text visible',
     explain: d => `Demo/template text is visible to shoppers: "${d.slice(0, 90)}"`, fix: 'Replace the placeholder text in the theme editor.', owner: 'Store admin / content',
