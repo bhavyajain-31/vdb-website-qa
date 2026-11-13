@@ -53,6 +53,7 @@ RUN_CHOICES = {
     "Test everything (new testing cycle)": "new-cycle",
     "Continue the previous cycle (only what is not tested yet)": "continue",
     "Re-test only the failures (after a fix)": "retest-failed",
+    "Phase 2 test cases (search, Diamond & Gemstone Search, ~10 min)": "phase2-tests",
 }
 
 # ------------------------------------------------------------------ access
@@ -95,6 +96,16 @@ def show_report(files: dict[str, bytes], label: str, zip_bytes: bytes | None = N
     c[0].metric("Critical problems", s.get("critical", 0))
     c[1].metric("Slow pages", s.get("performance", 0))
     c[2].metric("Minor issues", s.get("minor", 0))
+    jr = res.get("journeys")
+    if jr:
+        cs = jr.get("cases", [])
+        cnt = lambda *k: sum(1 for x in cs if x.get("status") in k)
+        st.markdown(f"**{jr.get('phase', 'Phase 2')} test cases** (run {ago(jr.get('startedAt'))}) · see the *Test cases* tab below")
+        c = st.columns(4)
+        c[0].metric("Test cases", len(cs))
+        c[1].metric("Passed", cnt("PASS", "WARN"))
+        c[2].metric("Failed", cnt("FAIL"))
+        c[3].metric("Couldn't verify", cnt("BLOCKED"))
     if s.get("pending"):
         st.info(f"{s['pending']} links were not reached before the time limit. Start a run with "
                 "“Continue the previous cycle” to finish them; finished results are kept.")
@@ -229,10 +240,12 @@ def local_mode() -> None:
         choice = st.radio("What should be tested?", list(RUN_CHOICES), index=0)
         busy = running_pid()
         if st.button("▶ Start test", type="primary", use_container_width=True, disabled=bool(busy)):
-            args = {"new-cycle": ["--fresh"], "continue": [], "retest-failed": ["--retest-failed"]}[RUN_CHOICES[choice]]
+            mode = RUN_CHOICES[choice]
+            script = "src/journeys/run.ts" if mode == "phase2-tests" else "src/run.ts"
+            args = {"new-cycle": ["--fresh"], "continue": [], "retest-failed": ["--retest-failed"], "phase2-tests": []}[mode]
             LOG.parent.mkdir(parents=True, exist_ok=True)
             with open(LOG, "w") as log:
-                p = subprocess.Popen(["npx", "tsx", "src/run.ts", *args], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                p = subprocess.Popen(["npx", "tsx", script, *args], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             PIDFILE.write_text(str(p.pid))
             st.rerun()
         if busy and st.button("■ Stop", use_container_width=True):

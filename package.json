@@ -10,7 +10,8 @@
     "qa:mobile": "tsx src/run.ts --viewport mobile --out reports/mobile --state state/mobile.json",
     "report": "tsx src/rerender.ts",
     "setup": "playwright install chromium",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "qa:phase2": "tsx src/journeys/run.ts"
   },
   "license": "UNLICENSED",
   "devDependencies": {

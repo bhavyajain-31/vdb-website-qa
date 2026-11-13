@@ -40,6 +40,7 @@ Open `reports/latest/dashboard.html` in any browser when it finishes. The consol
 | `npm run qa:retest-failed` | Re-runs only the cases that **failed** in this cycle. Use this after developers fix something. |
 | `npm run qa:quick` | A short smoke test: 40 links, homepage and listing pages only, separate report folder. |
 | `npm run qa:mobile` | The same checks on a 390 px phone screen, with a separate report and progress file. |
+| `npm run qa:phase2` | Runs the **Phase 2 test cases** (Week 1: global search, Diamond Search, Gemstone Search, 44 cases, about 10 min). Results appear in the dashboard's **Test cases** tab. See [docs/HOW-IT-WORKS.md › 9](docs/HOW-IT-WORKS.md#9-phase-2-test-cases). |
 | `npm run report` | Rebuilds the dashboard from `results.json` without testing again. |
 | `npm run qa -- --help` | Lists all options. |
 
