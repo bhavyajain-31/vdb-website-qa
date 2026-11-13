@@ -8,12 +8,13 @@ on:
         description: 'What to run'
         type: choice
         options:
-          - new-cycle
-          - continue
-          - retest-failed
+          - new-cycle       # test everything from scratch
+          - continue        # finish what the previous run did not reach
+          - retest-failed   # re-run only the failures (after a fix)
+          - phase2-tests    # Phase 2 test cases (search, Diamond & Gemstone Search)
         default: new-cycle
   schedule:
-    - cron: '17 2 * * 1'
+    - cron: '17 2 * * 1'   # Mondays 02:17 UTC (07:47 India time)
 
 jobs:
   qa:
@@ -27,6 +28,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      # progress is kept between runs so "continue" and "retest-failed" pick up the previous cycle
       - uses: actions/cache@v4
         with:
           path: state
@@ -38,6 +40,7 @@ jobs:
           case "${{ inputs.mode || 'new-cycle' }}" in
             new-cycle)     npx tsx src/run.ts --fresh ;;
             retest-failed) npx tsx src/run.ts --retest-failed ;;
+            phase2-tests)  npx tsx src/journeys/run.ts ;;
             *)             npx tsx src/run.ts ;;
           esac
       - uses: actions/upload-artifact@v4
