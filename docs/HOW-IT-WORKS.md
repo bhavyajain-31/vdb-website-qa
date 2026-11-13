@@ -240,3 +240,46 @@ During the parallel run, times are inflated, so they are marked **(busy)**. Page
   - keeps finished results, including failures, in the report;
   - re-tries "Couldn't verify" cases.
 - `--retest-failed` re-runs failures after a fix. `--fresh` starts a new testing cycle.
+
+## 9. Phase 2 test cases
+
+Phase 2 runs the cases from the test case sheet ("VDB Demo Store Automation – Final Test Cases") as real shopper journeys. **Week 1** is built: 44 cases.
+
+| Area | Cases | What the test does |
+| --- | --- | --- |
+| Global search | SR-01 – SR-07 | Types in the header search, reads the suggestions panel, opens results, uses the Availability / Price / Metal Type filters and the sort menu, searches a nonsense word and special characters, closes the panel. |
+| Diamond Search | DS-01 – DS-26 | Sets each filter like a shopper (clicks shapes, drags the Color / Clarity / Cut sliders, types carat and budget), presses Search and checks **every diamond on screen** against the filter. Also sort, infinite scroll, Modify / New / Clear Search, stock number, share, the detail panel (video, certificate, Have a Question, Book an Appointment, Close) and Add to Cart. |
+| Gemstone Search | GS-01 – GS-11 | Same for gemstones: type, single/pair, shape, carat, price, ratio, lab, treatment, sort, infinite scroll, Clear Search, collapsing Search Options, detail panel and Add to Cart. |
+
+**How a result is decided**
+
+- **What is compared.** Results are read twice: from the cards on screen (name, carat, price) and from the data the store's search service sent to the page for those same cards. A card fails if either one does not match the filter.
+- **Passed.** Everything the sheet expects happened.
+- **Failed.** The store did something different from the sheet. The reason names the cards or values that were wrong, and a screenshot is attached.
+- **Passed with warnings.** It works, but something is worth a look. For example, a filter the sheet mentions is not offered, or demo prices look unrealistic.
+- **Couldn't verify.** The test could not decide. Typical reasons:
+  - no stock matches (for example, no ruby pairs);
+  - an earlier step on the same page did not work;
+  - the page did not respond.
+
+  These are not counted as failures.
+
+**What is never done**
+
+- No form is submitted (contact, question, appointment, share, newsletter).
+- Nothing is bought.
+- *Add to Cart* uses a temporary cart that disappears with the test browser.
+
+**Running it**
+
+- **Streamlit or GitHub:** choose *Phase 2 test cases*.
+- **On your computer:** `npm run qa:phase2`.
+
+It runs separately from the link check, so the link check keeps its 20–25 minutes. A Phase 2 run shows the latest link-check results in the other tabs, and a link-check run shows the latest Phase 2 results in the Test cases tab.
+
+Screenshots of link-check failures are only in the link-check run's own report.
+
+**Changing a case**
+
+- The case wording comes from the sheet, in `src/journeys/catalog.ts`.
+- The checks are in `src/journeys/search.ts`, `diamond.ts` and `gemstone.ts`, one block per case ID.
