@@ -27,6 +27,7 @@ import { searchScenarios, sessionCarryOver } from './scenarios.js';
 import { loadState, needsRun, saveState, type State } from './state.js';
 import { pageStatus } from './content.js';
 import { assemble, assemblePlacement } from './results.js';
+import { loadJourneys, saveLastReport } from './journeys/store.js';
 import { writeReports, summarize } from './report.js';
 import type { ClickOutcome, DiscoveredLink, LinkResult, Placement, RunReport, Validation } from './types.js';
 
@@ -319,7 +320,9 @@ async function main() {
       deadClickables: st.deadClickables, scenarios: [...st.components, ...Object.values(st.scenarios)],
       homePerf: st.homePerf, homeImages: st.homeImages, stoppedReason,
     };
+    report.journeys = loadJourneys(cfg);
     const out = writeReports(report, cfg);
+    saveLastReport(cfg, report);
     const s = summarize(report);
     const mins = (run.durationMs / 60000).toFixed(1);
     console.log(`\nFinished in ${mins} min${stoppedReason ? ` (${stoppedReason})` : ''}. Rate-limit pauses: ${gate.hits429}.`);

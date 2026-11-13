@@ -297,4 +297,6 @@ export interface RunReport {
   /** Images found on the homepage (outside menus) during discovery. */
   homeImages: ImageResult[];
   stoppedReason?: string;
+  /** Phase 2 test cases (latest run of npm run qa:phase2). */
+  journeys?: import('./journeys/types.js').JourneyReport;
 }

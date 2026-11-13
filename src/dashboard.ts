@@ -48,6 +48,11 @@ export function renderDashboard(r: RunReport, cfg: Config): string {
     menuImgs: r.scenarios.filter(c => c.kind === 'menu').flatMap(c => (c.images ?? []).map(i => ({ src: i.src, s: i.status, why: i.reason, pos: i.position ?? c.name, w: i.naturalWidth, h: i.naturalHeight }))),
     images: img.entries.map(e => ({ ...e, pages: e.pages.map(short) })),
     imgTotals: img.totals,
+    noLinks: r.links.length === 0,
+    jr: r.journeys ? {
+      phase: r.journeys.phase, at: r.journeys.startedAt, ms: r.journeys.durationMs,
+      cases: r.journeys.cases.map(c => ({ id: c.id, area: c.area, t: c.title, steps: c.steps, exp: c.expected, pr: c.priority, known: c.known, s: c.status, act: c.actual, why: c.reasons, log: c.log, url: c.url, shot: c.screenshot, at: c.testedAt, ms: c.ms })),
+    } : null,
   };
   const json = JSON.stringify(data).replace(/</g, '\\u003c');
   const logoLight = logo('VDB-MAIN-TAG.svg'), logoDark = logo('VDB-WHITE-TAG.svg');
@@ -196,6 +201,7 @@ details.tech table{font-size:12.5px;margin-top:6px;background:var(--surface)}
   <section class="tab" id="t-home" role="tabpanel"></section>
   <section class="tab" id="t-links" role="tabpanel"></section>
   <section class="tab" id="t-images" role="tabpanel"></section>
+  <section class="tab" id="t-cases" role="tabpanel"></section>
 </main>
 <script type="application/json" id="qa-data">${json}</script>
 <script>
@@ -232,8 +238,8 @@ document.getElementById('meta').innerHTML = '<span>Site <b>' + e(D.base) + '</b>
   '<span>Tested this run <b>' + executed + '</b> · kept from earlier runs <b>' + D.links.filter(function(l){return l.carried;}).length + '</b></span><span>Testing cycle <b>' + e(D.cycleId) + '</b> (run ' + D.runs.length + ')</span>';
 
 // ---------- tabs
-var TABS = [['summary','Summary'],['home','Homepage & speed'],['links','Deeplinks'],['images','Images']];
-var badge = { summary: S.critical, home: (D.places.length ? D.places.filter(function(p){ return p.s==='FAIL'; }).length : D.links.filter(function(l){ return l.depth===0 && l.s==='FAIL'; }).length) + D.comps.filter(function(c){return c.s==='FAIL' && c.kind!=='copy';}).length, links: S.fail, images: D.imgTotals.failed };
+var TABS = [['summary','Summary'],['home','Homepage & speed'],['links','Deeplinks'],['images','Images'],['cases','Test cases']];
+var badge = { summary: S.critical, home: (D.places.length ? D.places.filter(function(p){ return p.s==='FAIL'; }).length : D.links.filter(function(l){ return l.depth===0 && l.s==='FAIL'; }).length) + D.comps.filter(function(c){return c.s==='FAIL' && c.kind!=='copy';}).length, links: S.fail, images: D.imgTotals.failed, cases: D.jr ? D.jr.cases.filter(function(c){ return c.s==='FAIL'; }).length : 0 };
 var tabsEl = document.getElementById('tabs');
 TABS.forEach(function(t){
   var b = document.createElement('button'); b.setAttribute('role','tab'); b.id = 'b-' + t[0];
@@ -252,6 +258,8 @@ function show(id){
   var head = crit ? crit + ' critical problem' + (crit>1?'s':'') + ' need fixing' : 'No critical problems found';
   var sub = [perf ? perf + ' slow page' + (perf>1?'s':'') : '', minor ? minor + ' minor issue' + (minor>1?'s':'') : ''].filter(Boolean).join(' · ');
   var h = '<div class="banner"><div><div class="big">' + e(head) + '</div><div class="small">' + e(sub || 'No speed or minor issues') + ' · ' + S.total + ' links checked, ' + D.imgTotals.tested + ' images checked</div></div></div>';
+  if (D.noLinks) h += '<div class="note"><b>The link check has not run yet.</b> Only the Phase 2 test cases are in this report (see the Test cases tab). Run a link check (New cycle) to fill the other tabs.</div>';
+  if (D.jr) { var jf = D.jr.cases.filter(function(c){ return c.s==='FAIL'; }).length; h += '<div class="note" style="background:var(--soft);color:var(--ink)"><b>' + e(D.jr.phase) + ' test cases:</b> ' + D.jr.cases.filter(function(c){ return c.s==='PASS'||c.s==='WARN'; }).length + ' of ' + D.jr.cases.length + ' passed' + (jf ? ', <b style="color:var(--fail)">' + jf + ' failed</b>' : '') + ' (run ' + e(new Date(D.jr.at).toLocaleString()) + '). <a href="#cases">See the Test cases tab</a>.</div>'; }
   if (D.stopped || S.pending) h += '<div class="note"><b>Not everything was tested yet.</b> ' + e(D.stopped ? D.stopped + '.' : '') + (S.pending ? ' ' + S.pending + ' links are waiting. Run the tool again and it continues where it stopped; finished results are kept.' : '') + '</div>';
 
   h += '<h2>Results by link</h2><p class="lead">Every link a shopper can reach from the homepage (menus, sliders, footer, product cards) was opened and checked. Click a box to see those links.</p><div class="grid">';
@@ -523,8 +531,52 @@ renderLinks();
   render();
 })();
 
+// ---------- TEST CASES (Phase 2)
+(function(){
+  var el = document.getElementById('t-cases');
+  if (!D.jr) { el.innerHTML = '<h2>Test cases</h2><div class="panel empty">The Phase 2 test cases have not been run yet. On the run page choose <b>Phase 2 test cases</b> (or run <code>npm run qa:phase2</code>).</div>'; return; }
+  var C = D.jr.cases;
+  var CS = { s: 'all', area: 'all', q: '', open: null };
+  var h = '<h2>' + e(D.jr.phase) + ' test cases</h2><p class="lead">Each case from the test case sheet, run in a real browser like a shopper: filters set, buttons clicked, results read on screen and compared with the data the store sent. Run ' + e(new Date(D.jr.at).toLocaleString()) + ', took ' + (Math.round(D.jr.ms/6000)/10) + ' min. Nothing is submitted or bought; Add to cart uses a temporary cart. Click a row for the steps.</p><div class="grid">';
+  ['FAIL','WARN','BLOCKED','PASS'].forEach(function(s){
+    var n = C.filter(function(c){ return c.s===s; }).length;
+    h += '<button class="tile ' + s + '" data-go="' + s + '"><div class="n">' + n + '</div><div class="l">' + e(NAMES[s]) + '</div><div class="h">' + e({FAIL:'The store did not do what the test case expects.',WARN:'Works; something is worth a look (see the reason).',BLOCKED:'The test could not decide (for example no stock to check). See the reason.',PASS:'Works as the test case expects.'}[s]) + '</div></button>';
+  });
+  h += '</div><div class="controls" id="tcStatus" style="margin-top:18px"></div><div class="controls"><select id="tcArea" aria-label="Area"></select><input type="search" id="tcQ" placeholder="Find by ID or words…" aria-label="Find a test case"></div>' +
+    '<div class="panel tbl"><table><thead><tr><th>ID</th><th>Result</th><th>Test case</th><th class="hide-s">Expected result</th><th>What happened</th></tr></thead><tbody id="tcBody"></tbody></table></div>';
+  el.innerHTML = h;
+  var areas = []; C.forEach(function(c){ if (areas.indexOf(c.area) < 0) areas.push(c.area); });
+  var sel = document.getElementById('tcArea');
+  sel.innerHTML = '<option value="all">All areas</option>' + areas.map(function(a){ return '<option value="' + e(a) + '">' + e(a) + ' (' + C.filter(function(c){ return c.area===a; }).length + ')</option>'; }).join('');
+  sel.onchange = function(){ CS.area = this.value; render(); };
+  document.getElementById('tcQ').oninput = function(){ CS.q = this.value.toLowerCase(); render(); };
+  el.querySelectorAll('button.tile').forEach(function(b){ b.onclick = function(){ CS.s = b.getAttribute('data-go'); render(); }; });
+  function render(){
+    var base = C.filter(function(c){ return (CS.area==='all' || c.area===CS.area) && (!CS.q || (c.id + ' ' + c.t + ' ' + c.exp + ' ' + c.act + ' ' + c.why.join(' ')).toLowerCase().indexOf(CS.q) >= 0); });
+    var st = document.getElementById('tcStatus');
+    st.innerHTML = ['all','FAIL','WARN','BLOCKED','PASS'].map(function(s){ var n = base.filter(function(c){ return s==='all' || c.s===s; }).length; return '<button class="chip" data-s="' + s + '" aria-pressed="' + (CS.s===s) + '">' + e(s==='all' ? 'All' : NAMES[s]) + '<span class="c">' + n + '</span></button>'; }).join('');
+    st.querySelectorAll('button').forEach(function(b){ b.onclick = function(){ CS.s = b.getAttribute('data-s'); render(); }; });
+    var rows = base.filter(function(c){ return CS.s==='all' || c.s===CS.s; });
+    document.getElementById('tcBody').innerHTML = rows.map(function(c){
+      var what = (c.act ? '<div>' + e(c.act) + '</div>' : '') + (c.why.length ? '<div style="color:' + (c.s==='FAIL' ? 'var(--fail)' : 'var(--muted)') + ';margin-top:4px">' + c.why.map(e).join('<br>') + '</div>' : '');
+      var row = '<tr class="row" data-id="' + e(c.id) + '"><td class="lbl" style="white-space:nowrap">' + e(c.id) + '<div class="small">' + e(c.pr) + '</div></td><td>' + pill(c.s) + '</td><td><div class="lbl">' + e(c.t) + '</div><div class="small">' + e(c.area) + '</div></td><td class="hide-s small" style="max-width:300px">' + e(c.exp) + '</td><td style="min-width:260px">' + what + (c.shot ? ' <a href="' + e(c.shot) + '" target="_blank">Screenshot</a>' : '') + '</td></tr>';
+      if (CS.open === c.id) row += '<tr class="detail"><td colspan="5"><div class="det"><div><dl>' +
+        '<dt>Steps in the sheet</dt><dd style="white-space:pre-line">' + e(c.steps) + '</dd>' +
+        '<dt>Expected</dt><dd>' + e(c.exp) + '</dd>' +
+        (c.known ? '<dt>Note in the sheet</dt><dd>' + e(c.known) + '</dd>' : '') +
+        '<dt>What the test did</dt><dd>' + (c.log.length ? '<ol style="margin:0;padding-left:18px">' + c.log.map(function(x){ return '<li>' + e(x) + '</li>'; }).join('') + '</ol>' : '–') + '</dd>' +
+        (c.url ? '<dt>Page</dt><dd>' + link(c.url) + '</dd>' : '') +
+        '<dt>Tested</dt><dd>' + e(new Date(c.at).toLocaleString()) + ' · ' + (Math.round(c.ms/100)/10) + ' s</dd></dl></div>' +
+        (c.shot ? '<div class="shot"><a href="' + e(c.shot) + '" target="_blank"><img src="' + e(c.shot) + '" alt="Screenshot of ' + e(c.id) + '" loading="lazy"></a></div>' : '<div></div>') + '</div></td></tr>';
+      return row;
+    }).join('') || '<tr><td colspan="5" class="empty">No test cases match.</td></tr>';
+    document.getElementById('tcBody').querySelectorAll('tr.row').forEach(function(tr){ tr.onclick = function(){ var id = tr.getAttribute('data-id'); CS.open = CS.open===id ? null : id; render(); }; });
+  }
+  render();
+})();
+
 var start = (location.hash || '').slice(1);
-show(TABS.some(function(t){ return t[0]===start; }) ? start : 'summary');
+show(TABS.some(function(t){ return t[0]===start; }) ? start : (D.noLinks && D.jr ? 'cases' : 'summary'));
 window.addEventListener('hashchange', function(){ var h = (location.hash || '').slice(1); if (TABS.some(function(t){ return t[0]===h; })) show(h); });
 })();
 </script>
