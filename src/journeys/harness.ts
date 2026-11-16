@@ -38,8 +38,15 @@ export class Suite {
     fs.mkdirSync(path.join(cfg.outDir, 'screenshots'), { recursive: true });
   }
 
+  /** Extra checks not in the sheet (filter-results checks), in the order they were added. */
+  extra: CaseDef[] = [];
+  define(d: Omit<CaseDef, 'steps' | 'type' | 'pre' | 'known'> & Partial<CaseDef>): string {
+    if (!this.extra.some(x => x.id === d.id)) this.extra.push({ steps: '', type: 'Positive', pre: '', known: '', ...d });
+    return d.id;
+  }
+
   def(id: string): CaseDef {
-    const d = CASES.find(c => c.id === id);
+    const d = CASES.find(c => c.id === id) ?? this.extra.find(c => c.id === id);
     if (!d) throw new Error(`Unknown test case ${id}`);
     return d;
   }
@@ -100,8 +107,18 @@ export class Suite {
 export function short(u: string, cfg: Config) { return u.startsWith(cfg.baseUrl) ? '/' + u.slice(cfg.baseUrl.length) : u; }
 
 /** A browser session for journey tests: animations off, auto-opening contact popup hidden, native alerts recorded. */
+/** Forgets what the store's apps remember between visits (last filters, last search), keeping the cart. */
+export async function forgetFilters(page: Page) {
+  await page.evaluate(() => { try { localStorage.clear(); sessionStorage.clear(); } catch { /* ignore */ } }).catch(() => {});
+  const ctx = page.context();
+  const keep = (await ctx.cookies()).filter(k => /cart|_shopify_y|_shopify_s|secure_customer|localization/i.test(k.name));
+  await ctx.clearCookies();
+  if (keep.length) await ctx.addCookies(keep);
+}
+
 export async function journeyContext(browser: Browser, cfg: Config): Promise<BrowserContext> {
-  const ctx = await newContext(browser, cfg, true);
+  // normal (not "quiet") mode: the store's sliders and carousels need full-speed animation frames
+  const ctx = await newContext(browser, cfg, false);
   // the "Want to speak to our team?" popup opens by itself after ~10 s and would cover what we click (tested separately in FM-02)
   await ctx.addInitScript(`document.addEventListener('DOMContentLoaded', function () { var s = document.createElement('style'); s.textContent = '#boxes,.contact-popup--wrapper,.contact-popup--overlay{display:none!important}'; document.head.appendChild(s); });`);
   return ctx;
@@ -167,10 +184,30 @@ export async function setSlider(page: Page, cls: string, from: string, to: strin
   const fi = g.values.indexOf(from), ti = g.values.indexOf(to);
   if (fi < 0 || ti < 0) throw new StepError(`The ${label} slider has no "${fi < 0 ? from : to}" option (it offers ${g.values.join(', ')})`);
   const X = (i: number) => g!.l + (i - g!.min) / (g!.max - g!.min || 1) * g!.w;
-  await page.mouse.move(g.tx, g.ty); await page.mouse.down(); await page.mouse.move(X(ti), g.ty, { steps: 10 }); await page.mouse.up();
-  await page.waitForTimeout(250);
+  const drag = async (x0: number, y: number, x1: number) => {
+    await page.mouse.move(x0, y); await page.mouse.down(); await page.waitForTimeout(120);
+    for (let k = 1; k <= 12; k++) { await page.mouse.move(x0 + (x1 - x0) * k / 12, y); await page.waitForTimeout(25); }
+    await page.waitForTimeout(200); await page.mouse.up(); await page.waitForTimeout(300);
+  };
+  const okVal = (v: string) => { const p = v.split(/[,;]/).map(x => x.trim()); return (p[0] === from && (p[1] ?? p[0]) === to); };
+  await drag(g.tx, g.ty, X(ti));
   g = (await geo())!;
-  if (fi > 0) { await page.mouse.move(g.fx, g.fy); await page.mouse.down(); await page.mouse.move(X(fi), g.fy, { steps: 10 }); await page.mouse.up(); await page.waitForTimeout(250); }
-  const v = (await geo())!.value;
+  if (fi > 0) await drag(g.fx, g.fy, X(fi));
+  let v = (await geo())!.value;
+  if (!okVal(v)) {
+    // fallback: move the handles through the slider's own controls (same result as dragging)
+    await page.evaluate(([cls, fi, ti]) => {
+      const inp = [...document.querySelectorAll('input.' + cls)].find(i => (i.previousElementSibling as HTMLElement | null)?.offsetWidth) as HTMLInputElement;
+      const sl = (window as any).jQuery?.(inp).data('ionRangeSlider');
+      if (!sl) return;
+      sl.update({ from: fi, to: ti });
+      const o = sl.options, r = sl.result ?? { from: fi, to: ti, input: (window as any).jQuery(inp), slider: (window as any).jQuery(inp.previousElementSibling) };
+      try { o.onChange?.(r); } catch { /* ignore */ }
+      try { o.onFinish?.(r); } catch { /* ignore */ }
+      (window as any).jQuery(inp).trigger('change');
+    }, [cls, fi, ti] as const);
+    await page.waitForTimeout(400);
+    v = (await geo())!.value;
+  }
   if (v !== `${from},${to}`) throw new StepError(`Could not set the ${label} slider to ${from} – ${to} (it shows ${v || 'nothing'})`);
 }

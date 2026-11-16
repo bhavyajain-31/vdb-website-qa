@@ -6,7 +6,7 @@ import { Case, Suite, StepError, fmt$, isVisible, journeyContext, list, money, m
 
 interface Product { title: string; price?: number; soldOut: boolean }
 
-async function openSearch(page: Page, cfg: Config, c: Case, fresh = true) {
+export async function openSearch(page: Page, cfg: Config, c: Case, fresh = true) {
   if (fresh) {
     c.step('Open the homepage');
     const g = await gotoSettled(page, cfg.baseUrl, cfg);
@@ -17,7 +17,7 @@ async function openSearch(page: Page, cfg: Config, c: Case, fresh = true) {
   return must(visible(page.locator('input[type="search"][name="q"]'), 8000), 'open the search box from the search icon');
 }
 
-async function submitSearch(page: Page, cfg: Config, c: Case, term: string) {
+export async function submitSearch(page: Page, cfg: Config, c: Case, term: string) {
   const input = await openSearch(page, cfg, c);
   c.step(`Type "${term}" and press Enter`);
   await input.fill(term);
@@ -25,7 +25,7 @@ async function submitSearch(page: Page, cfg: Config, c: Case, term: string) {
   await settle(page, 600);
 }
 
-async function products(page: Page): Promise<Product[]> {
+export async function products(page: Page): Promise<Product[]> {
   return page.$$eval('#product-grid > li, ul.product-grid > li', els => els.filter(e => (e as HTMLElement).offsetWidth > 0).map(e => {
     const sale = e.querySelector('.price--on-sale .price-item--sale');
     const reg = e.querySelector('.price__regular .price-item--regular, .price-item--regular');
@@ -39,25 +39,82 @@ async function products(page: Page): Promise<Product[]> {
 }
 
 /** Waits for the results grid to refresh after a filter or sort change (the theme swaps the grid in place). */
-async function afterChange(page: Page, urlPart: RegExp, what: string) {
+export async function afterChange(page: Page, urlPart: RegExp, what: string) {
   await page.waitForURL(urlPart, { timeout: 15_000 }).catch(() => { throw new StepError(`The page did not update after ${what}`); });
   await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
   await page.waitForTimeout(900);
 }
 
-async function resultCount(page: Page): Promise<number | undefined> {
+export async function resultCount(page: Page): Promise<number | undefined> {
   const t = await page.locator('#ProductCountDesktop, .product-count__text').locator('visible=true').first().innerText().catch(() => '');
   const m = t.replace(/,/g, '').match(/(\d+)/);
   return m ? Number(m[1]) : undefined;
 }
 
-async function openFacet(page: Page, name: string) {
+export async function openFacet(page: Page, name: string) {
   const sum = page.locator('facet-filters-form details > summary, #FacetFiltersForm details > summary').filter({ hasText: new RegExp(`^\\s*${name}`, 'i') }).locator('visible=true').first();
   if (!(await sum.count())) return null;
   const det = sum.locator('xpath=..');
   if (!(await det.evaluate(d => (d as HTMLDetailsElement).open))) { await sum.click(); await page.waitForTimeout(400); }
   return det;
 }
+
+
+export interface ProductData { handle: string; title: string; available: boolean; options: string[]; variants: { title: string; available: boolean; price: number; options: string[] }[] }
+
+/** The products behind the result cards, read from the store (the same data the product page shows). */
+export async function productData(page: Page): Promise<ProductData[]> {
+  return page.evaluate(async () => {
+    const handles = [...new Set([...document.querySelectorAll('#product-grid > li a[href*="/products/"], ul.product-grid > li a[href*="/products/"]')]
+      .map(a => (a.getAttribute('href') ?? '').match(/\/products\/([^/?#]+)/)?.[1]).filter(Boolean) as string[])];
+    const out = await Promise.all(handles.map(async h => {
+      try {
+        const j = await (await fetch(`/products/${h}.js`)).json();
+        return { handle: h, title: j.title, available: !!j.available, options: (j.options ?? []).map((o: any) => typeof o === 'string' ? o : o.name),
+          variants: (j.variants ?? []).map((v: any) => ({ title: v.title, available: !!v.available, price: v.price / 100, options: v.options ?? [v.option1, v.option2, v.option3].filter(Boolean) })) };
+      } catch { return null; }
+    }));
+    return out.filter(Boolean) as any;
+  });
+}
+
+/** Does the product really come in this metal? (a variant whose "Metal …" option is that value) */
+export function hasMetal(p: ProductData, metal: string): boolean {
+  const i = p.options.findIndex(o => /metal/i.test(o));
+  const want = metal.trim().toLowerCase();
+  if (i >= 0) return p.variants.some(v => (v.options[i] ?? '').trim().toLowerCase() === want);
+  return p.variants.some(v => v.title.toLowerCase().includes(want)) || p.title.toLowerCase().includes(want);
+}
+
+/** Opens one product like a shopper and confirms the metal is offered on its page. */
+export async function metalOnProductPage(page: Page, cfg: Config, c: Case, p: ProductData, metal: string): Promise<boolean> {
+  c.step(`Open "${p.title}" and look for ${metal} on the page`);
+  const g = await gotoSettled(page, cfg.baseUrl + 'products/' + p.handle, cfg);
+  if (g.error || (g.status && g.status >= 400)) { c.fail(`"${p.title}" does not open (${g.error ?? 'HTTP ' + g.status})`); return false; }
+  const text = (await page.locator('main').innerText().catch(() => '')).toLowerCase();
+  const opts = (await page.$$eval('variant-selects input, variant-radios input, variant-selects option, variant-radios option, select[name^="options"] option, fieldset input[type="radio"]', es => es.map(e => (e as HTMLInputElement).value || (e as HTMLElement).textContent || '')).catch(() => [] as string[])).map(x => x.trim().toLowerCase());
+  return opts.includes(metal.toLowerCase()) || text.includes(metal.toLowerCase());
+}
+
+/** Ticks one option of a filter on the search results page; returns the option's value. */
+export async function tickOption(page: Page, facet: string, option: string | number, urlRe: RegExp): Promise<string> {
+  const det = await openFacet(page, facet);
+  if (!det) throw new StepError(`There is no ${facet} filter`);
+  const labels = det.locator('label').filter({ has: page.locator('input[type="checkbox"]') });
+  const opt = typeof option === 'number' ? labels.nth(option) : labels.filter({ has: page.locator(`input[value="${option.replace(/"/g, '\\"')}"]`) }).first();
+  const val = (await opt.locator('input[type="checkbox"]').getAttribute('value').catch(() => null)) ?? String(option);
+  await must(opt.click({ timeout: 8000 }), `tick "${val}" under ${facet}`);
+  await afterChange(page, urlRe, `ticking ${val}`);
+  return val;
+}
+
+export async function facetOptions(page: Page, facet: string): Promise<string[]> {
+  const det = await openFacet(page, facet);
+  if (!det) return [];
+  return det.locator('input[type="checkbox"]').evaluateAll(es => es.map(e => (e as HTMLInputElement).value).filter(Boolean));
+}
+
+const METAL_URL = /filter\.(p\.m\.custom\.metal_type|v\.option\.metal[^=]*)=/i;
 
 export async function searchGroup(browser: Browser, cfg: Config, suite: Suite) {
   const ctx = await journeyContext(browser, cfg);
@@ -73,7 +130,7 @@ export async function searchGroup(browser: Browser, cfg: Config, suite: Suite) {
       const shown = await visible(panel, 10_000).then(() => true).catch(() => false);
       if (!c.check(shown, 'No suggestions panel appears while typing "halo"')) return;
       await page.waitForTimeout(800);
-      const sugg = await page.$$eval('#predictive-search-results-queries-list a, #predictive-search-results-queries-list li', es => es.map(e => (e as HTMLElement).innerText.trim()).filter(Boolean));
+      const sugg = await page.$$eval('#predictive-search-results-queries-list li', es => es.map(e => (e as HTMLElement).innerText.trim()).filter(Boolean));
       const prods = await page.$$eval('#predictive-search-results-products-list li', es => es.map(e => (e as HTMLElement).innerText.replace(/\s+/g, ' ').trim()).filter(Boolean));
       c.check(sugg.length > 0, 'The panel has no SUGGESTIONS');
       c.check(prods.length > 0, 'The panel has no PRODUCTS');
@@ -115,8 +172,11 @@ export async function searchGroup(browser: Browser, cfg: Config, suite: Suite) {
         await afterChange(page, /filter\.v\.availability=1/, 'ticking In stock');
         const ps = await products(page);
         const sold = ps.filter(x => x.soldOut);
-        c.check(!sold.length, `"In stock" still shows sold-out products: ${list(sold.map(x => x.title))}`);
-        done.push(`In stock → ${(await resultCount(page)) ?? ps.length}`);
+        c.check(!sold.length, `"In stock" still shows products marked Sold out: ${list(sold.map(x => x.title))}`);
+        const data = await productData(page);
+        const none = data.filter(p => !p.available);
+        c.check(!none.length, `"In stock" shows products that cannot be bought (no variant in stock): ${list(none.map(p => p.title))}`);
+        done.push(`In stock → ${(await resultCount(page)) ?? ps.length} (all ${data.length} products checked have stock)`);
       }
 
       // Price range
@@ -129,25 +189,26 @@ export async function searchGroup(browser: Browser, cfg: Config, suite: Suite) {
         await must(hi.fill('3000'), 'type a maximum price'); await hi.dispatchEvent('input');
         await afterChange(page, /filter\.v\.price\.lte=3000/, 'entering a price range');
         const ps = await products(page);
-        const out = ps.filter(x => x.price != null && (x.price < 500 || x.price > 3000));
-        c.check(!out.length, `${out.length} products are outside $500 – $3,000: ${list(out.map(x => `${x.title} ${fmt$(x.price)}`))}`);
-        done.push(`$500–$3,000 → ${(await resultCount(page)) ?? ps.length}`);
+        const data = await productData(page);
+        const out = data.filter(p => !p.variants.some(v => v.price >= 500 && v.price <= 3000));
+        c.check(!out.length, `${out.length} products have no option priced $500 – $3,000: ${list(out.map(p => `${p.title} (${fmt$(Math.min(...p.variants.map(v => v.price)))}–${fmt$(Math.max(...p.variants.map(v => v.price)))})`))}`);
+        done.push(`$500–$3,000 → ${(await resultCount(page)) ?? ps.length} (all ${data.length} products have an option in range)`);
       }
 
       // Metal Type: first option
       await page.goto(SEARCH); await settle(page, 600);
       const mt = await openFacet(page, 'Metal');
       if (c.check(!!mt, 'There is no Metal Type filter')) {
-        const opt = mt!.locator('label').filter({ hasText: /\w/ }).first();
-        const val = (await opt.innerText().catch(() => '')).replace(/\(\d+\)/, '').replace(/\s+/g, ' ').trim();
-        c.step(`Metal Type: tick ${val}`);
-        await must(opt.click({ timeout: 8000 }), `tick metal type "${val}"`);
-        await afterChange(page, /filter\.p\.m\.custom\.metal_type=/, `ticking ${val}`);
+        c.step('Metal Type: tick the first option');
+        const val = await tickOption(page, 'Metal', 0, METAL_URL);
         const after = await resultCount(page);
-        const ps = await products(page);
-        c.check(ps.length > 0, `Metal Type "${val}" shows no products`);
+        const data = await productData(page);
+        c.check(data.length > 0, `Metal Type "${val}" shows no products`);
         if (base != null && after != null) c.check(after <= base, `Metal Type "${val}" shows more results (${after}) than without it (${base})`);
-        done.push(`${val} → ${after ?? ps.length}`);
+        const wrong = data.filter(p => !hasMetal(p, val));
+        c.check(!wrong.length, `${wrong.length} of ${data.length} products shown are not available in ${val}: ${list(wrong.map(p => p.title))}`);
+        if (data[0]) c.check(await metalOnProductPage(page, cfg, c, data[0], val), `"${data[0].title}" does not offer ${val} on its product page`);
+        done.push(`${val} → ${after ?? data.length} (all ${data.length - wrong.length} products come in ${val}; "${data[0]?.title}" opened and shows ${val})`);
       }
       if (!names.some(nm => /categor|product type/i.test(nm))) c.warn('There is no Category filter on the search results page, so it was not tested');
       c.actual = `Without filters ${base ?? '?'} results. ${done.join('; ')}. Each list updated and matched its filter.`;
@@ -209,6 +270,54 @@ export async function searchGroup(browser: Browser, cfg: Config, suite: Suite) {
       c.check(!still, 'The search panel stays open after clicking Close');
       c.actual = 'Search panel opens and closes.';
     });
+  } finally { await ctx.close().catch(() => {}); }
+}
+
+/** Filter results on the search page: every Metal Type option (+ in stock / out of stock), each product checked. */
+export async function searchFilterChecks(browser: Browser, cfg: Config, suite: Suite) {
+  const ctx = await journeyContext(browser, cfg);
+  const page = await ctx.newPage();
+  const SEARCH = cfg.baseUrl + 'search?q=halo&options%5Bprefix%5D=last';
+  const area = 'Global search · filter results';
+  try {
+    await page.goto(SEARCH); await settle(page, 600);
+    const base = await resultCount(page);
+    const metals = await facetOptions(page, 'Metal');
+    const avail = await facetOptions(page, 'Availability');
+    let i = 0;
+    for (const m of metals) {
+      const id = suite.define({ id: `SRF-${String(++i).padStart(2, '0')}`, area, title: `Metal Type ${m}`, expected: `Every product shown is available in ${m} (checked in each product's options, and on the first product's page)`, priority: 'P1' });
+      await suite.run(id, page, async c => {
+        c.step('Search "halo"');
+        await page.goto(SEARCH); await settle(page, 600);
+        c.step(`Tick Metal Type ${m}`);
+        await tickOption(page, 'Metal', m, METAL_URL);
+        const after = await resultCount(page);
+        const data = await productData(page);
+        if (!data.length) { c.blocked(`No products in ${m}, so there was nothing to check`); c.actual = '0 results.'; return; }
+        if (base != null && after != null) c.check(after <= base, `${m} shows more results (${after}) than without the filter (${base})`);
+        const wrong = data.filter(p => !hasMetal(p, m));
+        c.check(!wrong.length, `${wrong.length} of ${data.length} products shown are not available in ${m}: ${list(wrong.map(p => p.title))}`);
+        const pick = data.find(p => hasMetal(p, m)) ?? data[0];
+        const onPage = await metalOnProductPage(page, cfg, c, pick, m);
+        c.check(onPage, `"${pick.title}" does not show ${m} on its product page`);
+        c.actual = `${after ?? data.length} results; ${data.length - wrong.length} of ${data.length} products come in ${m}${onPage ? `; "${pick.title}" opened and offers ${m}` : ''}.`;
+      });
+    }
+    for (const a of avail) {
+      const label = a === '1' ? 'In stock' : a === '0' ? 'Out of stock' : a;
+      const id = suite.define({ id: `SRF-${String(++i).padStart(2, '0')}`, area, title: `Availability ${label}`, expected: label === 'In stock' ? 'Every product shown can be bought (at least one option in stock)' : 'Every product shown has at least one option out of stock', priority: 'P2' });
+      await suite.run(id, page, async c => {
+        await page.goto(SEARCH); await settle(page, 600);
+        c.step(`Tick Availability ${label}`);
+        await tickOption(page, 'Availability', a, new RegExp(`filter\\.v\\.availability=${a}`));
+        const data = await productData(page);
+        if (!data.length) { c.blocked(`No products are ${label.toLowerCase()}, so there was nothing to check`); c.actual = '0 results.'; return; }
+        const wrong = label === 'In stock' ? data.filter(p => !p.available) : data.filter(p => p.variants.every(v => v.available));
+        c.check(!wrong.length, `${wrong.length} of ${data.length} products do not match "${label}": ${list(wrong.map(p => p.title))}`);
+        c.actual = `${data.length - wrong.length} of ${data.length} products match "${label}".`;
+      });
+    }
   } finally { await ctx.close().catch(() => {}); }
 }
 

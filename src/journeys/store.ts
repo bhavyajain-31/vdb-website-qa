@@ -13,9 +13,14 @@ export function loadJourneys(cfg: Config): JourneyReport | undefined {
   try { return JSON.parse(fs.readFileSync(journeysFile(cfg), 'utf8')); } catch { return undefined; }
 }
 
+export const trackerFile = (cfg: Config) => path.join(path.dirname(cfg.stateFile), 'tracker.json');
+export function loadTracker(cfg: Config): JourneyReport | undefined {
+  try { return JSON.parse(fs.readFileSync(trackerFile(cfg), 'utf8')); } catch { return undefined; }
+}
+
 export function saveLastReport(cfg: Config, r: RunReport) {
-  const { journeys: _j, ...rest } = r;
-  void _j;
+  const { journeys: _j, tracker: _t, ...rest } = r;
+  void _j; void _t;
   fs.mkdirSync(path.dirname(lastReportFile(cfg)), { recursive: true });
   fs.writeFileSync(lastReportFile(cfg), JSON.stringify(rest));
 }

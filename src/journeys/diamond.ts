@@ -2,21 +2,21 @@
 import type { Browser, Page, Response } from 'playwright';
 import type { Config } from '../config.js';
 import { gotoSettled } from '../browser.js';
-import { Case, Suite, StepError, during, fmt$, isVisible, journeyContext, list, money, must, setSlider, visible, watchDialogs } from './harness.js';
+import { Case, Suite, StepError, during, forgetFilters, fmt$, isVisible, journeyContext, list, money, must, setSlider, visible, watchDialogs } from './harness.js';
 
 const DS_PATH = 'apps/vdb-app/search-filters?structure=new';
 
-interface Diamond {
+export interface Diamond {
   id: number; stock_num: string; shape: string; size: string; color: string | null; clarity: string; cut: string | null; polish: string | null; symmetry: string | null;
   total_sales_price: string; fluor_intensity: string | null; depth_percent: string | null; table_percent: number | string | null; lab_grown?: boolean;
   fancy_color_dominant_color: string | null; fancy_color_intensity: string | null; short_title?: string;
 }
-interface Card { id: string; name: string; cat: string; price?: number; shape?: string; carat?: number; color?: string; clarity?: string }
+export interface Card { id: string; name: string; cat: string; price?: number; shape?: string; carat?: number; color?: string; clarity?: string }
 interface SearchResult { total?: number; items: Diamond[]; req: string }
 
 const post = (r: Response) => r.request().postData() ?? '';
 const isList = (r: Response) => /search-filters\.php/.test(r.url()) && /method=getProduct/.test(post(r)) && !/only_count_fetch|share_proids/.test(post(r));
-const isPage1 = (r: Response) => isList(r) && /[&]page_number=1(&|$)/.test(post(r));
+export const isPage1 = (r: Response) => isList(r) && /[&]page_number=1(&|$)/.test(post(r));
 const isCount = (r: Response) => /search-filters\.php/.test(r.url()) && /only_count_fetch=true/.test(post(r));
 export const param = (body: string, k: string) => decodeURIComponent(((body.match(new RegExp('(?:^|&)' + k.replace(/[.[\]]/g, '\\$&') + '=([^&]*)')) || [])[1] || '').replace(/\+/g, ' '));
 
@@ -34,7 +34,7 @@ export function parseCardName(n: string): Pick<Card, 'shape' | 'carat' | 'color'
 }
 
 /** One Diamond Search page under test. */
-class DS {
+export class DS {
   byId = new Map<string, Diamond>();
   dialogs: string[];
   constructor(public page: Page, public cfg: Config) {
@@ -44,6 +44,7 @@ class DS {
 
   async open(c?: Case, url = DS_PATH) {
     c?.step('Open Diamond Search');
+    if (this.page.url().startsWith(this.cfg.baseUrl)) await forgetFilters(this.page); // start from a clean form, not the last search
     const g = await gotoSettled(this.page, this.cfg.baseUrl + url, this.cfg);
     if (g.error || (g.status && g.status >= 400)) throw new StepError(`Could not open Diamond Search (${g.error ?? 'HTTP ' + g.status})`);
     await must(visible(this.page.locator('a.vdb-search-diamond-data-wrap'), 30_000), 'see the Diamond Search form (it did not appear within 30 s)');
@@ -397,7 +398,9 @@ export async function diamondFilterGroup(browser: Browser, cfg: Config, suite: S
       c.check(!loader, 'The loading animation keeps spinning');
       c.check(s.dialogs.length === 0, `An error pop-up appeared: "${s.dialogs[0]}"`);
       const txt = await page.locator('#search_diamond_count').locator('visible=true').first().innerText().catch(() => '');
-      c.actual = `Shows "${txt.trim()}" with no cards; no error and no endless loader.`;
+      const used = `${param(r.req, 'shape_data_wrap')}, ${param(r.req, 'carat_min')}–${param(r.req, 'carat_max')} ct, colour ${param(r.req, 'color_data_wrap')}, clarity ${param(r.req, 'clarity_data_wrap')}, budget up to $${param(r.req, 'budget_max')}`;
+      if (Number(param(r.req, 'carat_min')) !== 6) c.note(`(The page searched from ${param(r.req, 'carat_min')} ct instead of the 6.00 ct typed.)`);
+      c.actual = `Searched ${used}: shows "${txt.trim()}" with no cards; no error and no endless loader.`;
     });
 
     await suite.run('DS-25', page, async c => {

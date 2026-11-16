@@ -251,6 +251,23 @@ Phase 2 runs the cases from the test case sheet ("VDB Demo Store Automation – 
 | Diamond Search | DS-01 – DS-26 | Sets each filter like a shopper (clicks shapes, drags the Color / Clarity / Cut sliders, types carat and budget), presses Search and checks **every diamond on screen** against the filter. Also sort, infinite scroll, Modify / New / Clear Search, stock number, share, the detail panel (video, certificate, Have a Question, Book an Appointment, Close) and Add to Cart. |
 | Gemstone Search | GS-01 – GS-11 | Same for gemstones: type, single/pair, shape, carat, price, ratio, lab, treatment, sort, infinite scroll, Clear Search, collapsing Search Options, detail panel and Add to Cart. |
 
+**Filter results: every value of every filter**
+
+On top of the sheet's cases, the run applies **each value of each filter on its own** and checks that every stone returned matches it. These rows have IDs starting **DSF-** (diamonds) and **GSF-** (gemstones).
+
+| Search | Filters checked, one value (or band) at a time |
+| --- | --- |
+| Diamond Search | Every shape. Every fancy colour. Color in bands of 3 (D–F, G–I, …). Clarity in pairs (FL–IF, VVS1–VVS2, …). Carat bands (0.30–0.69 … 3.00–7.00). Each Cut Grade, Polish, Symmetry and Fluorescence grade. Budget bands. Round and D–F on the Lab-Grown tab. |
+| Gemstone Search | Every gem type. Every shape. Carat bands. Price bands. Each lab. |
+| Search page (SRF-) | Every Metal Type option, plus In stock and Out of stock. Each product shown is read from the store: it must really come in that metal (one of its options), or have stock. One product per metal is also opened to see the metal on its page. |
+
+- **Where the values come from.** They are read from the page itself, so a new shape or colour added to the store is tested automatically.
+- **What each check confirms:**
+  1. The search was sent with the filter value the shopper chose.
+  2. "N Results" is above 0 and not more than without any filter.
+  3. **Every diamond returned** (the cards on screen plus all the stones the store sent for them, about 24) has that shape, colour, grade, carat or price.
+- **When nothing is in stock** for a value, the row shows *Couldn't verify (0 results)*. It is not a failure.
+
 **How a result is decided**
 
 - **What is compared.** Results are read twice: from the cards on screen (name, carat, price) and from the data the store's search service sent to the page for those same cards. A card fails if either one does not match the filter.
@@ -283,3 +300,28 @@ Screenshots of link-check failures are only in the link-check run's own report.
 
 - The case wording comes from the sheet, in `src/journeys/catalog.ts`.
 - The checks are in `src/journeys/search.ts`, `diamond.ts` and `gemstone.ts`, one block per case ID.
+
+## 10. Daily monitoring tracker (TC-01 to TC-33)
+
+The tracker sheet's cases run as one suite, separate from the link check and Phase 2.
+
+- **Streamlit:** choose *Daily tracker tests*.
+- **GitHub:** choose `tracker-tests`.
+- **On your computer:** `npm run qa:tracker`.
+
+TC-26 (checkout), TC-29 (contact form) and TC-30 (newsletter) are listed as *Untested / manual*, because they would submit real data.
+
+| Area | Cases | Flow checked |
+| --- | --- | --- |
+| Home & menus | TC-01, 02, 03, 31, 33 | Load time, hero, carousels, footer and broken images. Every mega menu opens with links. One link per menu column opens a real page. About and policy pages, FAQ answers expand, social icons open in a new tab. The header and footer "Create Ring with Natural" links land on the same page. |
+| Search & shop | TC-04, 05, 21–25 | "halo ring" shows halo rings and opens the product. "xyz123" shows the no-results message. Collections show image, name and the correct "From" price. The collection metal filter is checked on every product's options, plus price sort. Product page: each option change shows that option's price and image. Sold-out band cannot be added. Cart: add, quantity 2 (totals update), remove, then "Your cart is empty". |
+| Diamond Search | TC-06–12 | Menu → Search Diamonds → results. Oval / 1–2 ct / G–H / VS1–VS2 / price, with every diamond checked. Sort options do not overlap, price order is correct, scrolling loads more. Detail page contents. Lab-grown search and its filters. Every shape shortcut and every coloured-diamond menu link shows only that shape or colour. |
+| Ring Builder | TC-13–17 | Gemstones load with images and prices. Stone first: stone → setting (must support the stone's shape) → metal and ring size → completed ring (subtotal = stone + setting) → **Add to cart** (both parts, linked, correct total). Lab-grown and gemstone starts keep the stone. Setting first: setting → only compatible stones offered → stone → completed ring (ring size kept) → **Add to cart**. |
+| 3D, quiz, configurators | TC-18–20 | The 3D model renders, rotates when dragged, and updates on metal and shape changes. The quiz is answered to its recommendations. Configure Rings and Configure Fine Jewelry: image, stock number and price change with metal and shape. |
+| Phone | TC-32 | On a 390 px screen: pages fit (no sideways scroll), the menu opens, Diamond Search shows results, product to cart works. |
+
+**Output**
+
+- The **Daily tracker** tab in the dashboard.
+- A new file, `daily-tracker-results.csv`, with one row per TC: test case, steps, expected result, **Result** (Passed / Passed with warnings / Failed / Couldn't verify / Manual), what happened, reason, time tested (India time) and screenshot.
+- It is a separate file. The tool never opens or changes your tracker sheet.

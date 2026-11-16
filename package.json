@@ -11,7 +11,8 @@
     "report": "tsx src/rerender.ts",
     "setup": "playwright install chromium",
     "typecheck": "tsc -p .",
-    "qa:phase2": "tsx src/journeys/run.ts"
+    "qa:phase2": "tsx src/journeys/run.ts",
+    "qa:tracker": "tsx src/journeys/tracker-run.ts"
   },
   "license": "UNLICENSED",
   "devDependencies": {

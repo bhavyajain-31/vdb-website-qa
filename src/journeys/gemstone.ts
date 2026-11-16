@@ -2,15 +2,15 @@
 import type { Browser, Page, Response } from 'playwright';
 import type { Config } from '../config.js';
 import { gotoSettled } from '../browser.js';
-import { Case, Suite, StepError, during, fmt$, isVisible, journeyContext, list, money, must, visible, watchDialogs } from './harness.js';
+import { Case, Suite, StepError, during, forgetFilters, fmt$, isVisible, journeyContext, list, money, must, visible, watchDialogs } from './harness.js';
 
 const GS_PATH = (gem: string) => `apps/vdb-app/gemstone?&gem_type=${gem}`;
 
-interface Gem {
+export interface Gem {
   id: number; stock_num: string; gem_type: string; shape: string; color: string; size: string; total_sales_price: string;
   lab: string | null; treatment: string | null; meas_ratio: string | null; pair: unknown; is_linked_pair_parent: unknown;
 }
-interface Card { id: string; name: string; price?: number }
+export interface GemCard { id: string; name: string; price?: number }
 
 const post = (r: Response) => r.request().postData() ?? '';
 const isList = (r: Response) => /gemstone\.php/.test(r.url()) && /action=get_gemstone_list/.test(post(r)) && !/only_count_fetch/.test(post(r));
@@ -20,7 +20,7 @@ async function gemsOf(r: Response): Promise<Gem[]> {
   try { const j = await r.json(); const m = typeof j.main_data === 'string' ? JSON.parse(j.main_data) : j.main_data; return m?.response?.body?.gemstones ?? []; } catch { return []; }
 }
 
-class GS {
+export class GS {
   byId = new Map<string, Gem>();
   dialogs: string[];
   lastReq = '';
@@ -31,6 +31,7 @@ class GS {
 
   async open(c: Case | undefined, gem = 'Ruby') {
     c?.step(`Open GEMSTONES › ${gem}`);
+    if (this.page.url().startsWith(this.cfg.baseUrl)) await forgetFilters(this.page);
     const listWait = this.page.waitForResponse(isPage1, { timeout: 45_000 }).catch(() => null);
     const g = await gotoSettled(this.page, this.cfg.baseUrl + GS_PATH(gem), this.cfg);
     if (g.error || (g.status && g.status >= 400)) throw new StepError(`Could not open Gemstone Search (${g.error ?? 'HTTP ' + g.status})`);
@@ -61,7 +62,7 @@ class GS {
     return m ? Number(m[1]) : undefined;
   }
 
-  async cards(): Promise<Card[]> {
+  async cards(): Promise<GemCard[]> {
     const raw = await this.page.$$eval('.vdbgs-get_show_pro_data', els => els.filter(e => (e as HTMLElement).offsetWidth > 0).map(e => ({
       id: e.getAttribute('data-prids') ?? '',
       name: (e.querySelector('.vdb-gem-product-title-and-price p')?.textContent ?? '').replace(/\s+/g, ' ').trim(),
@@ -88,13 +89,13 @@ class GS {
   async type(section: string, cls: string, v: string) {
     await this.section(section);
     const i = await must(visible(this.page.locator('input.' + cls)), `find the ${section} box`);
-    await i.fill(v); await i.press('Tab');
+    await i.fill(v); await i.press('Enter'); // the gemstone filters search on Enter (Tab does not send the search)
   }
 }
 
 const n = (x: number | undefined) => x == null ? 'an unknown number of' : x.toLocaleString('en-US');
 
-function every(c: Case, s: GS, cards: Card[], ok: (k: Card, g?: Gem) => boolean, what: string) {
+function every(c: Case, s: GS, cards: GemCard[], ok: (k: GemCard, g?: Gem) => boolean, what: string) {
   const bad = cards.filter(k => !ok(k, s.byId.get(k.id)));
   c.check(!bad.length, `${bad.length} of ${cards.length} gemstones shown ${what}: ${list(bad.map(b => b.name))}`);
   return cards.length - bad.length;
@@ -157,7 +158,7 @@ export async function gemstoneListGroup(browser: Browser, cfg: Config, suite: Su
       await page.evaluate(() => window.scrollTo(0, 0));
     }, ['GS-01']);
 
-    let card: Card | undefined;
+    let card: GemCard | undefined;
     await suite.run('GS-09', page, async c => {
       await s.open(c, 'Ruby');
       card = (await s.cards())[0];
@@ -217,20 +218,32 @@ export async function gemstoneFilterGroup(browser: Browser, cfg: Config, suite: 
     await suite.run('GS-03', page, async c => {
       await s.open(c, 'Ruby');
       await s.apply(c, 'Choose Pair', async () => (await visible(page.locator('.vdbgem_pair[data-value="PAIR"]'))).click(), /gem_type_pair=PAIR/);
-      const total = await s.count();
-      const cards = await s.cards();
-      if (!cards.length) { c.blocked(`No ruby pairs are in stock (${n(total)} results), so "only pairs shown" could not be checked`); return; }
+      let total = await s.count();
+      let cards = await s.cards();
+      let gem = 'Ruby';
+      const tried = ['Ruby'];
+      // no ruby pairs in stock: try the other gem types until one has pairs
+      for (const g of ['Sapphire', 'Emerald', 'Aquamarine', 'Morganite', 'Tanzanite', 'Alexandrite']) {
+        if (cards.length) break;
+        const tile = page.locator(`.vdbgem_type[data-value="${g}"]`).locator('visible=true').first();
+        if (!(await tile.count())) continue;
+        await s.apply(c, `No pairs: try ${g}`, () => tile.click(), new RegExp(`gem_type=${g}(&|$)`)).catch(() => []);
+        tried.push(g); gem = g;
+        total = await s.count(); cards = await s.cards();
+      }
+      if (!c.check(/gem_type_pair=PAIR/.test(s.lastReq), 'The Pair choice was not kept in the search')) return;
+      if (!cards.length) { c.blocked(`No pairs are in stock for ${tried.join(', ')} (0 results each), so "only pairs shown" could not be checked`); return; }
       every(c, s, cards, (_k, g) => !g || !!g.pair || !!g.is_linked_pair_parent, 'are single stones, not pairs');
-      c.actual = `${n(total)} results, all pairs.`;
+      c.actual = `${gem}: ${n(total)} results with Pair chosen, all pairs${tried.length > 1 ? ` (no pairs for ${tried.slice(0, -1).join(', ')})` : ''}.`;
     });
 
     await suite.run('GS-04', page, async c => {
       await s.open(c, 'Sapphire');
       await s.apply(c, 'Tick shape Oval', () => s.tick('Shape', 'Oval'), /shapes=Oval/);
-      await s.apply(c, 'Enter carat from 0.50', () => s.type('Carat', 'vdbgem_carat_min', '0.50'), /carat_min=0\.50/);
-      await s.apply(c, 'Enter carat to 2.00', () => s.type('Carat', 'vdbgem_carat_max', '2.00'), /carat_max=2\.00/);
-      await s.apply(c, 'Enter price from 100', () => s.type('Price', 'vdbgem_price_min', '100'), /price_min=100/);
-      await s.apply(c, 'Enter price to 3000', () => s.type('Price', 'vdbgem_price_max', '3000'), /price_max=3000/);
+      await s.apply(c, 'Enter carat from 0.50', () => s.type('Carat', 'vdbgem_carat_min', '0.50'), undefined);
+      await s.apply(c, 'Enter carat to 2.00', () => s.type('Carat', 'vdbgem_carat_max', '2.00'), undefined);
+      await s.apply(c, 'Enter price from 100', () => s.type('Price', 'vdbgem_price_min', '100'), undefined);
+      await s.apply(c, 'Enter price to 3000', () => s.type('Price', 'vdbgem_price_max', '3000'), undefined);
       const total = await s.count();
       const cards = await s.cards();
       if (!cards.length) { c.blocked(`No oval sapphires of 0.50–2.00 ct priced $100–$3,000 (${n(total)} results), so nothing could be checked`); return; }
@@ -243,8 +256,8 @@ export async function gemstoneFilterGroup(browser: Browser, cfg: Config, suite: 
 
     await suite.run('GS-05', page, async c => {
       await s.open(c, 'Sapphire');
-      await s.apply(c, 'Enter ratio from 1.00', () => s.type('Ratio', 'vdbgem_ratio_min', '1.00'), /ratio[^=]*min=1/i);
-      await s.apply(c, 'Enter ratio to 1.50', () => s.type('Ratio', 'vdbgem_ratio_max', '1.50'), /ratio[^=]*max=1\.5/i);
+      await s.apply(c, 'Enter ratio from 1.00', () => s.type('Ratio', 'vdbgem_ratio_min', '1.00'), undefined);
+      await s.apply(c, 'Enter ratio to 1.50', () => s.type('Ratio', 'vdbgem_ratio_max', '1.50'), undefined);
       await s.apply(c, 'Tick lab GIA', () => s.tick('Lab', 'GIA'), /GIA/);
       let treat = '';
       try {

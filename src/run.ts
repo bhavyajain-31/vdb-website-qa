@@ -27,7 +27,7 @@ import { searchScenarios, sessionCarryOver } from './scenarios.js';
 import { loadState, needsRun, saveState, type State } from './state.js';
 import { pageStatus } from './content.js';
 import { assemble, assemblePlacement } from './results.js';
-import { loadJourneys, saveLastReport } from './journeys/store.js';
+import { loadJourneys, loadTracker, saveLastReport } from './journeys/store.js';
 import { writeReports, summarize } from './report.js';
 import type { ClickOutcome, DiscoveredLink, LinkResult, Placement, RunReport, Validation } from './types.js';
 
@@ -321,6 +321,7 @@ async function main() {
       homePerf: st.homePerf, homeImages: st.homeImages, stoppedReason,
     };
     report.journeys = loadJourneys(cfg);
+    report.tracker = loadTracker(cfg);
     const out = writeReports(report, cfg);
     saveLastReport(cfg, report);
     const s = summarize(report);
