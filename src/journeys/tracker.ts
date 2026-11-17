@@ -74,8 +74,14 @@ async function chooseSize(page: Page, c: Case, want: number): Promise<string> {
   return picked.split('=').pop()!;
 }
 
+/** The ring size currently selected, read from the same dropdown chooseSize uses (US sizes, or mm sizes such as "6.0" on some settings). */
 async function sizeShown(page: Page): Promise<string> {
-  return page.evaluate(() => { const s = [...document.querySelectorAll('select')].find(x => /size/i.test(x.id + ' ' + x.name + ' ' + x.className) && (x as HTMLElement).offsetWidth > 0) as HTMLSelectElement | undefined; return s && s.selectedIndex > 0 ? s.options[s.selectedIndex].text.trim() : ''; });
+  return page.evaluate(() => {
+    const sels = [...document.querySelectorAll('select')] as HTMLSelectElement[];
+    const s = sels.find(x => /size/i.test(x.id + ' ' + x.name + ' ' + x.className) && x.offsetWidth > 0)
+      ?? sels.find(x => /ring|size|mm/i.test(x.id + ' ' + x.name + ' ' + x.className) && [...x.options].filter(o => /^\d+(\.\d+)?$/.test(o.text.trim())).length > 3);
+    return s && s.selectedIndex > 0 ? s.options[s.selectedIndex].text.trim() : '';
+  });
 }
 
 async function mainText(page: Page) { return (await page.locator('#MainContent').innerText().catch(() => '')).replace(/\s+/g, ' ').trim(); }
@@ -123,7 +129,7 @@ async function readDetail(page: Page): Promise<Detail> {
 }
 
 async function cartJson(page: Page) {
-  return page.evaluate(async () => (await fetch('/cart.js')).json()).catch(() => null) as Promise<{ item_count: number; total_price: number; items: { title: string; sku: string; quantity: number; final_line_price: number; properties: Record<string, string> | null }[] } | null>;
+  return page.evaluate(async () => (await fetch('/cart.js')).json()).catch(() => null) as Promise<{ item_count: number; total_price: number; items: { key: string; title: string; sku: string; quantity: number; final_line_price: number; properties: Record<string, string> | null }[] } | null>;
 }
 const lineStock = (i: { sku: string; properties: Record<string, string> | null }) => i.properties?.['_Stock #'] ?? i.properties?.['Stock No.'] ?? i.sku?.replace(/^\d{8}-/, '');
 
@@ -202,23 +208,36 @@ async function checkReview(page: Page, c: Case, stoneStock?: string, settingStoc
   return { stocks, prices, sub };
 }
 
-/** Add to Cart on the completed ring; checks both parts land in the cart, grouped, with the right total. */
-async function ringToCart(page: Page, c: Case, sub?: number) {
-  if (!(await sizeShown(page))) { c.note('(Ring size was empty on the summary, so it was chosen again.)'); await chooseSize(page, c, 7).catch(() => {}); }
+/** Add to Cart on the completed ring: compares the cart before and after the click, so only the lines this click added
+ *  are counted; checks both parts are there, linked as one ring, with the ring size and a total equal to the subtotal. */
+async function ringToCart(page: Page, c: Case, sub?: number, wantSize?: string) {
+  const shown = await sizeShown(page);
+  if (!shown) {
+    c.note('(No ring size was selected on the summary, so one was chosen there.)');
+    await chooseSize(page, c, Number(wantSize) || 7).catch(() => {});
+    await page.waitForTimeout(2500); // the summary refreshes after a size change
+  }
   const stocks = [...(await mainText(page)).matchAll(/Stock # (\S+)/g)].map(m => m[1]);
+  const before = await cartJson(page);
+  const had = new Map((before?.items ?? []).map(i => [i.key, i.quantity]));
   c.step('Click Add to Cart');
   await must((await visible(page.locator('button.vdb-rc-pdp-actions__primary-btn'))).click(), 'click "Add to Cart" on the completed ring');
   await page.waitForURL(/\/cart/, { timeout: 25_000 }).catch(() => {});
-  await page.waitForTimeout(1500);
-  const cart = await cartJson(page);
+  // wait until the cart actually holds the new lines (up to 15 s)
+  let cart = await cartJson(page);
+  for (let k = 0; k < 10 && cart && cart.item_count <= (before?.item_count ?? 0); k++) { await page.waitForTimeout(1500); cart = await cartJson(page); }
   if (!cart) throw new StepError('Could not read the cart');
-  const lines = cart.items.filter(i => stocks.includes(lineStock(i) ?? ''));
-  c.check(lines.length === stocks.length, `The cart has ${lines.length} of the ${stocks.length} ring parts (${stocks.join(', ')})`);
+  const added = cart.items.filter(i => (had.get(i.key) ?? 0) < i.quantity);
+  if (!c.check(added.length > 0, `Add to Cart put nothing new in the cart (cart has ${cart.item_count} item${cart.item_count === 1 ? '' : 's'})`)) return 'Cart: nothing added.';
+  const lines = stocks.length ? added.filter(i => stocks.includes(lineStock(i) ?? '')) : added;
+  if (stocks.length) c.check(lines.length === stocks.length, `The cart got ${lines.length} of the ${stocks.length} ring parts (${stocks.join(', ')}); added: ${added.map(l => `${l.title} (${lineStock(l)})`).join(', ')}`);
   const groups = new Set(lines.map(l => l.properties?.['_Order Group ID']).filter(Boolean));
   if (lines.length > 1) c.check(groups.size === 1, 'The stone and setting are not linked as one ring in the cart');
   const total = lines.reduce((s, l) => s + l.final_line_price, 0) / 100;
   if (sub != null) c.check(Math.abs(total - sub) < 0.01, `Cart total for the ring ${fmt$(total)} differs from the subtotal ${fmt$(sub)}`);
-  const size = lines.map(l => l.properties?.['Ring Size']).find(Boolean);
+  const size = lines.map(l => Object.entries(l.properties ?? {}).find(([k, v]) => /ring ?size/i.test(k) && v)?.[1]).find(Boolean);
+  const want = shown || wantSize;
+  if (want) c.check(!!size && Number(size) === Number(want), `The cart shows ring size ${size ?? 'none'}, but ${want} was chosen`);
   return `Cart: ${lines.map(l => `"${l.title}"`).join(' + ')}${size ? `, ring size ${size}` : ''}, total ${fmt$(total)}.`;
 }
 
@@ -805,7 +824,7 @@ export async function trackerSettingFirst(browser: Browser, cfg: Config, suite: 
       const incompatible = stones.filter(r => supported.length && !supported.some(s => sameShape(s, r.shape)));
       c.check(!incompatible.length, `${incompatible.length} of ${stones.length} stones offered do not fit the setting (it takes ${supported.join(', ')}; offered e.g. ${incompatible[0]?.shape})`);
       c.step(`Pick "${links[0].text}"`);
-      await open(page, cfg, links[0].href);
+      await open(page, cfg, links[0].href, undefined, `stone "${links[0].text}"`);
       const stone = await readDetail(page);
       c.step('Click Select …');
       await must((await visible(page.locator('a.vdb-rc-stone-pdp__select-btn'))).click(), 'click the stone\'s "Select" button');
@@ -814,7 +833,7 @@ export async function trackerSettingFirst(browser: Browser, cfg: Config, suite: 
       const r = await checkReview(page, c, stone.stock, setting.stock, setting.title);
       const kept = await sizeShown(page);
       c.check(!!kept && Number(kept) === Number(size), `The ring size chosen (${size}) is not kept on the summary (shows "${kept || 'none'}")`);
-      const cartLine = await ringToCart(page, c, r.sub);
+      const cartLine = await ringToCart(page, c, r.sub, kept || size);
       c.actual = `Setting ${setting.title} (${setting.stock}), ring size ${size} → ${stones.length} compatible stones offered → ${stone.title} → completed ring ${fmt$(r.sub)}, size ${kept || '–'} kept. ${cartLine}`;
     });
 
@@ -822,15 +841,17 @@ export async function trackerSettingFirst(browser: Browser, cfg: Config, suite: 
       await open(page, cfg, `${RB}rb-setting-details?in_journey=true&ring_stock_num=SG-SL1003-RD-14W-14W&ring_reference_id=240081`, c, '3D Ring Builder');
       const canvas = page.locator('#webgl_vdb_canvas, canvas').locator('visible=true').first();
       if (!c.check(await canvas.waitFor({ timeout: 20_000 }).then(() => true).catch(() => false), 'The 3D viewer does not appear')) return;
-      const shot = () => canvas.screenshot({ timeout: 15_000 }).catch(() => Buffer.alloc(0));
+      // the test browser has no graphics card, so a picture of a 3D view takes ~25 s to take: allow 45 s per picture
+      const shot = () => canvas.screenshot({ timeout: 45_000 }).catch(() => Buffer.alloc(0));
       const stock = async () => (await readDetail(page)).stock;
-      // the 3D model can take a while to draw: wait up to 60 s for something to appear
+      // the 3D model can take a while to draw: wait up to 90 s for something to appear
       const t0 = Date.now();
-      let a = await shot();
-      while (a.length < 8000 && Date.now() - t0 < 60_000) { await page.waitForTimeout(3000); a = await shot(); }
-      const renderS = Math.round((Date.now() - t0) / 1000);
-      if (!c.check(a.length >= 8000, 'The 3D viewer stays blank after 60 s')) return;
-      const changed = async (prev: Buffer) => { let x = await shot(); for (let k = 0; k < 8 && x.equals(prev); k++) { await page.waitForTimeout(2500); x = await shot(); } return x; };
+      // the time counted is until the picture that shows the model was started (taking the picture itself is slow here)
+      let tShot = Date.now(), a = await shot();
+      while (a.length < 8000 && Date.now() - t0 < 90_000) { await page.waitForTimeout(3000); tShot = Date.now(); a = await shot(); }
+      const renderS = Math.round((tShot - t0) / 1000);
+      if (!c.check(a.length >= 8000, 'The 3D viewer stays blank after 90 s')) return;
+      const changed = async (prev: Buffer) => { await page.waitForTimeout(3000); let x = await shot(); for (let k = 0; k < 2 && (x.equals(prev) || !x.length); k++) { await page.waitForTimeout(3000); x = await shot(); } return x; };
       c.step('Drag the model');
       const box = await canvas.boundingBox();
       if (box) { await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2); await page.mouse.down(); await page.mouse.move(box.x + box.width * 0.75, box.y + box.height / 2, { steps: 15 }); await page.mouse.up(); }
@@ -839,88 +860,115 @@ export async function trackerSettingFirst(browser: Browser, cfg: Config, suite: 
       const s0 = await stock();
       c.step('Change the metal');
       const metals = page.locator('button.vdbrb_list_item_a_metal_type_option').locator('visible=true');
-      if (await metals.count() > 1) await metals.nth(1).click();
+      if (await metals.count() > 1) await metals.nth(1).click({ timeout: 8000 }).catch(() => metals.nth(1).evaluate(b => (b as HTMLElement).click()).catch(() => {}));
       const m = await changed(b); const s1 = await stock();
-      c.check(s1 !== s0 || !m.equals(b), 'Changing the metal does not update the model or stock number (waited 20 s)');
+      c.check(s1 !== s0 || !m.equals(b), 'Changing the metal does not update the model or stock number');
       c.step('Change the shape to Oval');
-      await page.locator('button.vdbrb_list_item_a_supported_shapes_option', { hasText: /^\s*Oval\s*$/ }).first().click().catch(() => {});
+      { const ov = page.locator('button.vdbrb_list_item_a_supported_shapes_option', { hasText: /^\s*Oval\s*$/ }).first(); await ov.click({ timeout: 8000 }).catch(() => ov.evaluate(b => (b as HTMLElement).click()).catch(() => {})); }
       const o = await changed(m); const s2 = await stock();
-      c.check(s2 !== s1 && !o.equals(m), `Changing the shape to Oval does not update the model and stock number (${s1} → ${s2}, waited 20 s)`);
+      c.check(s2 !== s1 && !o.equals(m), `Changing the shape to Oval does not update the model and stock number (${s1} → ${s2})`);
       c.note(`(The 3D model took about ${renderS} s to appear.)`);
       recordPerf(page, { kind: '3D model', url: page.url().replace(cfg.baseUrl, '/'), name: '3D Ring Builder – model drawn', ms: renderS * 1000 });
       c.actual = `3D model renders, rotates when dragged; stock ${s0} → ${s1} (metal) → ${s2} (Oval), model updated each time.`;
-    });
+    }, [], 480_000);
 
     await suite.run('TC-20', page, async c => {
-      // where shoppers reach the configurators: the menus and the homepage button
-      const entries = (await headerLinks(page, cfg)).filter(l => /configure/i.test(l.label));
-      const home = await page.$$eval('#MainContent a[href]', as => as.filter(a => /configure/i.test(a.textContent ?? '')).map(a => ({ label: (a.textContent ?? '').replace(/\s+/g, ' ').trim(), href: (a as HTMLAnchorElement).href })));
-      const all = [...entries.map(e => ({ ...e, where: 'menu' })), ...home.map(e => ({ ...e, where: 'homepage' }))];
-      if (!c.check(all.length > 0, 'No "Configure" links found in the menus or on the homepage')) return;
-      const dests = [...new Set(all.map(e => new URL(e.href).pathname))];
-      c.note(`(Configurator links: ${list(all.map(e => `${e.where} "${e.label}" → ${new URL(e.href).pathname}`), 5)}.)`);
+      // shoppers reach the configurable rings from the Fine Jewelry mega menu › "Configure Rings"
+      await open(page, cfg, cfg.baseUrl, c, 'the homepage');
+      const others = [
+        ...(await headerLinks(page, cfg)).filter(l => /configure/i.test(l.label)).map(e => ({ ...e, where: 'menu' })),
+        ...(await page.$$eval('#MainContent a[href]', as => as.filter(a => /configure/i.test(a.textContent ?? '')).map(a => ({ label: (a.textContent ?? '').replace(/\s+/g, ' ').trim(), href: (a as HTMLAnchorElement).href })))).map(e => ({ ...e, where: 'homepage' })),
+      ];
+      c.step('Hover "Fine Jewelry" in the menu');
+      const fj = page.locator('header details > summary', { hasText: /fine jewel/i }).locator('visible=true').first();
+      await must(fj.hover().then(() => page.waitForTimeout(800)), 'open the Fine Jewelry mega menu');
+      const link = page.locator('header a', { hasText: /^\s*Configure Rings\s*$/i }).locator('visible=true').first();
+      if (!(await link.count())) { await fj.click().catch(() => {}); await page.waitForTimeout(800); }
+      if (!c.check(await link.count() > 0, 'The Fine Jewelry mega menu has no "Configure Rings" link')) return;
+      const dest = new URL((await link.getAttribute('href')) ?? '/', cfg.baseUrl).pathname;
+      const same = others.filter(e => new URL(e.href).pathname === dest && !/^configure rings$/i.test(e.label));
+      if (same.length) c.note(`(${list(same.map(e => `${e.where} "${e.label}"`), 4)} open the same page.)`);
+      // the products are drawn by the configurator app after the page loads: watch its product request
+      let api = '';
+      const onResp = (r: Response) => { if (/spjc|on-forge\.com\/api\/storefront\/products/.test(r.url()) && /products/.test(r.url())) api = `${r.status()} ${r.url().split('?')[0]}`; };
+      page.on('response', onResp);
+      c.step('Click "Configure Rings"');
+      const t0 = Date.now();
+      await Promise.all([page.waitForURL(u => u.pathname === dest, { timeout: 30_000 }).catch(() => {}), link.click()]);
+      const label = `Fine Jewelry › Configure Rings (${dest})`;
+      // wait up to 45 s where the products appear (no scrolling down to the footer)
+      const first = await page.waitForFunction(() => (([...document.querySelectorAll('#MainContent a[href*="/products/"]')].find(a => (a as HTMLElement).offsetWidth > 0) as HTMLAnchorElement | undefined)?.href) || null, null, { timeout: 45_000 })
+        .then(h => h.jsonValue() as Promise<string>).catch(() => undefined);
+      page.off('response', onResp);
+      recordPerf(page, { kind: 'Results shown', url: dest, name: `${label} – products on screen`, ms: Date.now() - t0, ok: !!first });
+      if (!first) {
+        await page.evaluate(() => window.scrollTo(0, 0));
+        c.check(false, `${label} shows no products after 45 s (configurator product request: ${api || 'never sent'})`);
+        return;
+      }
+      const count = await page.$$eval('#MainContent a[href*="/products/"]', as => new Set(as.filter(a => (a as HTMLElement).offsetWidth > 0).map(a => (a as HTMLAnchorElement).pathname)).size);
+      c.note(`(${label}: ${count} products shown after ${Math.round((Date.now() - t0) / 100) / 10} s.)`);
       const out: string[] = [];
-      for (const dest of dests) {
-        const label = all.filter(e => new URL(e.href).pathname === dest).map(e => `"${e.label}"`).join(' / ');
-        await open(page, cfg, dest, c, `${label} (${dest})`);
-        // the configurable products are drawn by an app after the page loads: scroll down and wait for them
-        let first: string | undefined;
-        const t0 = Date.now();
-        for (let k = 0; k < 15 && !first; k++) {
-          first = await page.$$eval('#MainContent a[href*="/products/"]', as => (as.find(a => (a as HTMLElement).offsetWidth > 0) as HTMLAnchorElement | undefined)?.href);
-          if (!first) { await page.mouse.wheel(0, 700); await page.waitForTimeout(2000); }
-        }
-        recordPerf(page, { kind: 'Results shown', url: dest, name: `${label} – products on screen`, ms: Date.now() - t0 });
-        if (!c.check(!!first, `${label} (${dest}) shows no products, even after scrolling down`)) continue;
+      {
         await open(page, cfg, first!, c, 'the first configurable product');
         await must(visible(page.locator('.vdb-spjc-config-panel__price'), 30_000), 'see the configurator (price panel)');
         await page.waitForTimeout(1500);
-        const title = (await page.locator('#MainContent h1, #MainContent h2').first().innerText().catch(() => '')).trim();
-        // tag every option button by its group (shape, size, metal colour, head / shank metal colour)
+        const title = (await page.locator('.vdb-spjc-config-panel__title, #MainContent h1').first().innerText().catch(() => '')).trim();
+        // tag every option by its section (Shape, Size, Metal Color, Head Metal Color, Shank Metal Color …):
+        // each section is a .vdb-spjc-config-section with a label and swatch buttons named by title / aria-label
         const groups = await page.evaluate(() => {
-          const SHAPES = /^(round|oval|pear|emerald|princess|radiant|cushion|marquise|asscher|heart)$/i;
-          const btns = [...document.querySelectorAll('#MainContent button')].filter(b => (b as HTMLElement).offsetWidth > 0) as HTMLElement[];
-          const shape = btns.filter(b => SHAPES.test(b.innerText.trim()));
-          const metal = btns.filter(b => /gold|platinum|silver/i.test(b.innerText) && b.innerText.trim().length < 30);
-          const size = btns.filter(b => /^\d+(\.\d+)?$/.test(b.innerText.trim()));
-          const txt = document.querySelector('#MainContent')!.textContent ?? '';
-          const two = /Head Metal Colou?r/i.test(txt) && /Shank Metal Colou?r/i.test(txt) && metal.length % 2 === 0;
-          const g: Record<string, HTMLElement[]> = { Shape: shape, Size: size };
-          if (two) { g['Head Metal Color'] = metal.slice(0, metal.length / 2); g['Shank Metal Color'] = metal.slice(metal.length / 2); } else g['Metal Color'] = metal;
           const out: Record<string, { i: number; text: string; active: boolean }[]> = {};
-          for (const [name, list] of Object.entries(g)) {
-            if (!list.length) continue;
-            out[name] = list.map((b, i) => { b.setAttribute('data-qa-opt', `${name}|${i}`); return { i, text: b.innerText.trim(), active: /active|selected|checked/i.test(b.className) || b.getAttribute('aria-pressed') === 'true' }; });
-          }
+          document.querySelectorAll('.vdb-spjc-config-section').forEach(sec => {
+            const lab = sec.querySelector('.vdb-spjc-config-section__label');
+            const name = ((lab?.firstChild?.textContent ?? lab?.textContent ?? '').replace(/[:\s]+$/, '').trim()) || 'Option';
+            if (/engrav/i.test(name)) return;
+            const btns = ([...sec.querySelectorAll('button, [role="radio"], input[type="radio"] + label')] as HTMLElement[])
+              .filter(b => !/nav|prev|next|share/i.test(b.className) && (b.getAttribute('title') || b.getAttribute('aria-label') || b.innerText.trim()));
+            if (btns.length < 2) return;
+            out[name] = btns.map((b, i) => { b.setAttribute('data-qa-opt', `${name}|${i}`); return { i, text: (b.getAttribute('title') || b.getAttribute('aria-label') || b.innerText).trim(), active: /active|selected|checked/i.test(b.className) || b.getAttribute('aria-pressed') === 'true' || b.getAttribute('aria-checked') === 'true' }; });
+          });
           return out;
         });
         const state = async () => ({
           price: money(await page.locator('.vdb-spjc-config-panel__price').first().innerText().catch(() => '')),
-          stock: (await mainText(page)).match(/Stock # (\S+)/)?.[1],
-          img: await page.$$eval('#MainContent img', is => (is.filter(i => i.getBoundingClientRect().width > 200).map(i => (i as HTMLImageElement).currentSrc || (i as HTMLImageElement).src)[0]) ?? ''),
+          stock: (await page.locator('.vdb-spjc-config-panel__stock').first().innerText().catch(() => '')).replace(/^Stock #\s*/i, '').trim() || (await mainText(page)).match(/Stock # (\S+)/)?.[1],
+          img: await page.$$eval('#MainContent img', is => (is.filter(i => i.getBoundingClientRect().width > 200 && !/swatch/.test(i.className)).map(i => (i as HTMLImageElement).currentSrc || (i as HTMLImageElement).src)[0]) ?? ''),
         });
         const rows: string[] = [];
         const noStock: string[] = [], noImg: string[] = [];
-        let metalPriceMoved = false, metalTried = 0;
+        const samePrice: string[] = []; let metalTried = 0;
+        const kindOf = (t: string) => (t.match(/\d+\s*K|platinum|silver/i)?.[0] ?? '').replace(/\s+/g, '').toLowerCase();
+        const colourOf = (t: string) => (t.match(/white|yellow|rose|platinum|silver/i)?.[0] ?? '').toLowerCase();
         for (const [name, opts] of Object.entries(groups)) {
-          const cur = opts.find(o => o.active) ?? opts[0];
-          const next = opts.find(o => o !== cur && o.text !== cur.text);
+          let cur = opts.find(o => o.active) ?? opts[0];
+          // metals: change to a different metal (e.g. 14K → 18K: stock and price change) and to another colour (picture and stock change)
+          const targets = /metal/i.test(name)
+            ? [{ o: opts.find(o => kindOf(o.text) && kindOf(o.text) !== kindOf(cur.text) && colourOf(o.text) === colourOf(cur.text)), why: 'metal' }, { o: undefined as typeof cur | undefined, why: 'colour' }]
+            : [{ o: opts.find(o => o !== cur && o.text !== cur.text), why: 'option' }];
+          for (const tg of targets) {
+          const next = tg.why === 'colour' ? opts.find(o => colourOf(o.text) && colourOf(o.text) !== colourOf(cur.text)) : tg.o;
           if (!next) continue;
           const before = await state();
           c.step(`${name}: ${cur.text} → ${next.text}`);
-          await page.locator(`[data-qa-opt="${name}|${next.i}"]`).click().catch(() => {});
+          const optBtn = page.locator(`[data-qa-opt="${name}|${next.i}"]`);
+          // options sit in a sliding row: if the shopper would have to slide to it, click it directly
+          await optBtn.click({ timeout: 5000 }).catch(() => optBtn.evaluate(b => (b as HTMLElement).click()).catch(() => {}));
           let after = before;
           for (let k = 0; k < 8; k++) { await page.waitForTimeout(1000); after = await state(); if (after.stock !== before.stock && after.img !== before.img) break; }
           if (after.stock === before.stock) noStock.push(`${name} → ${next.text} (stays ${before.stock})`);
-          if (after.img === before.img) noImg.push(`${name} → ${next.text}`);
-          if (/metal/i.test(name)) { metalTried++; if (after.price !== before.price) metalPriceMoved = true; }
+          if (after.img === before.img && tg.why !== 'metal' && !/size/i.test(name)) noImg.push(`${name} → ${next.text}`);
+          // a different metal (14K → 18K, platinum) must change the price; a colour of the same gold may keep it
+          if (tg.why === 'metal') { metalTried++; if (after.price === before.price) samePrice.push(`${name} ${cur.text} → ${next.text} (stays ${fmt$(after.price)})`); }
           rows.push(`${name} ${next.text}: stock ${before.stock} → ${after.stock}, price ${fmt$(before.price)} → ${fmt$(after.price)}, picture ${after.img !== before.img ? 'changed' : 'same'}`);
+          cur = next;
+          }
         }
-        if (!rows.length) { c.blocked(`"${title}": no options to change were found`); continue; }
-        if (!groups.Size) c.note(`("${title}" has no size option.)`);
+        if (!rows.length) { c.blocked(`"${title}": no options to change were found`); return; }
+        if (!Object.keys(groups).some(g => /size/i.test(g))) c.note(`("${title}" has no size option; options: ${Object.keys(groups).join(', ')}.)`);
         c.check(!noStock.length, `"${title}": the stock number does not change for ${list(noStock, 4)}`);
         c.check(!noImg.length, `"${title}": the picture does not change for ${list(noImg, 4)}`);
-        if (metalTried) c.check(metalPriceMoved, `"${title}": the price stays the same after changing the metal (${list(rows.filter(r => /Metal/.test(r)), 3)})`);
+        if (metalTried) c.check(!samePrice.length, `"${title}": the price stays the same after changing to a different metal: ${list(samePrice, 3)}`);
+        else if (Object.keys(groups).some(g => /metal/i.test(g))) c.note(`(Only one gold type is offered (no 14K/18K/platinum choice), so the price was not expected to change with the metal colour.)`);
         // 3D view for the chosen options
         const open3d = page.getByText(/Open 3D/i).locator('visible=true').first();
         if (await open3d.count()) {
@@ -928,19 +976,21 @@ export async function trackerSettingFirst(browser: Browser, cfg: Config, suite: 
           const t3 = Date.now();
           await open3d.click().catch(() => {});
           const canvas = page.locator('canvas').locator('visible=true').first();
-          let shot: Buffer = Buffer.alloc(0);
+          let shot: Buffer = Buffer.alloc(0), tShot = Date.now();
           if (await canvas.waitFor({ timeout: 20_000 }).then(() => true).catch(() => false)) {
-            while (shot.length < 8000 && Date.now() - t3 < 60_000) { await page.waitForTimeout(2500); shot = await canvas.screenshot({ timeout: 15_000 }).catch(() => Buffer.alloc(0)); }
+            // no graphics card in the test browser: a picture of the 3D view takes ~25 s, so allow 45 s per picture
+            while (shot.length < 8000 && Date.now() - t3 < 90_000) { await page.waitForTimeout(2500); tShot = Date.now(); shot = await canvas.screenshot({ timeout: 45_000 }).catch(() => Buffer.alloc(0)); }
           }
-          recordPerf(page, { kind: '3D model', url: page.url().replace(cfg.baseUrl, '/'), name: `"${title}" – 3D view drawn`, ms: Date.now() - t3, ok: shot.length >= 8000 });
-          c.check(shot.length >= 8000, `"${title}": the 3D view stays blank after 60 s`);
-          rows.push(`3D view ${shot.length >= 8000 ? `shown after ${Math.round((Date.now() - t3) / 1000)} s` : 'blank'}`);
+          const drawnMs = tShot - t3;
+          recordPerf(page, { kind: '3D model', url: page.url().replace(cfg.baseUrl, '/'), name: `"${title}" – 3D view drawn`, ms: shot.length >= 8000 ? drawnMs : Date.now() - t3, ok: shot.length >= 8000 });
+          c.check(shot.length >= 8000, `"${title}": the 3D view stays blank after 90 s`);
+          rows.push(`3D view ${shot.length >= 8000 ? `shown (within ${Math.round(drawnMs / 1000)} s)` : 'blank'}`);
           await page.keyboard.press('Escape').catch(() => {});
         } else c.note(`("${title}" has no 3D button.)`);
         out.push(`${label} → "${title}": ${rows.join('; ')}`);
       }
       c.actual = out.join(' | ');
-    });
+    }, [], 480_000);
     void dialogs;
   } finally { await ctx.close().catch(() => {}); }
 }

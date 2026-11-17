@@ -97,7 +97,7 @@ def show_report(files: dict[str, bytes], label: str, zip_bytes: bytes | None = N
         c[2].metric("Failed", cnt("FAIL"))
         c[3].metric("Couldn't verify", cnt("BLOCKED"))
         c[4].metric("Slow steps (> 3 s)", len(slow))
-        st.caption("Tabs below: Daily tracker (every TC with its result) and Performance concerns (steps over 3 s).")
+        st.caption("Below: the Daily tracker tab (every TC with its result). Its Performance concerns button, next to Skipped, lists steps over 3 s.")
     else:
         c = st.columns(6)
         c[0].metric("Links checked", s.get("total", 0))

@@ -71,7 +71,7 @@ export class Suite {
    * Runs one test case. `needs`: earlier cases on the same page that must have worked
    * (otherwise this one is reported as "Couldn't verify" instead of a misleading failure).
    */
-  async run(id: string, page: Page | null, fn: (c: Case) => Promise<void>, needs: string[] = []): Promise<Case> {
+  async run(id: string, page: Page | null, fn: (c: Case) => Promise<void>, needs: string[] = [], limitMs = CASE_MS): Promise<Case> {
     const c = new Case(this.def(id));
     const t0 = Date.now();
     const at = new Date().toISOString();
@@ -84,7 +84,7 @@ export class Suite {
       try {
         await Promise.race([
           fn(c),
-          new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new StepError('The page did not respond within 2 minutes')), CASE_MS); }),
+          new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new StepError(`The test did not finish within ${Math.round(limitMs / 60000)} minutes (the page was still loading or waiting)`)), limitMs); }),
         ]);
       } catch (e) {
         const msg = e instanceof StepError ? e.message : `Unexpected problem while testing: ${String((e as Error).message ?? e).split('\n')[0].slice(0, 160)}`;

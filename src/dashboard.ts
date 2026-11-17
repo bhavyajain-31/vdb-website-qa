@@ -209,7 +209,6 @@ details.tech table{font-size:12.5px;margin-top:6px;background:var(--surface)}
   <section class="tab" id="t-links" role="tabpanel"></section>
   <section class="tab" id="t-images" role="tabpanel"></section>
   <section class="tab" id="t-tracker" role="tabpanel"></section>
-  <section class="tab" id="t-perf" role="tabpanel"></section>
 </main>
 <script type="application/json" id="qa-data">${json}</script>
 <script>
@@ -253,7 +252,7 @@ document.getElementById('meta').innerHTML = '<span>Site <b>' + e(D.base) + '</b>
 
 // ---------- tabs
 // a link-check report shows the Phase 1 tabs; a daily tracker report shows only the tracker tabs
-var TABS = D.view === 'tracker' ? [['tracker','Daily tracker'],['perf','Performance concerns']] : [['summary','Summary'],['home','Homepage & speed'],['links','Deeplinks'],['images','Images']];
+var TABS = D.view === 'tracker' ? [['tracker','Daily tracker']] : [['summary','Summary'],['home','Homepage & speed'],['links','Deeplinks'],['images','Images']];
 var badge = { summary: S.critical, home: (D.places.length ? D.places.filter(function(p){ return p.s==='FAIL'; }).length : D.links.filter(function(l){ return l.depth===0 && l.s==='FAIL'; }).length) + D.comps.filter(function(c){return c.s==='FAIL' && c.kind!=='copy';}).length, links: S.fail, images: D.imgTotals.failed, perf: 0, tracker: D.tr ? D.tr.cases.filter(function(c){ return c.s==='FAIL'; }).length : 0 };
 var tabsEl = document.getElementById('tabs');
 TABS.forEach(function(t){
@@ -568,25 +567,22 @@ renderLinks();
 })();
 
 // ---------- PERFORMANCE CONCERNS (daily tracker only): steps that took more than 3 s to load or show results
-(function(){
-  var el = document.getElementById('t-perf');
-  if (!D.tr) { el.innerHTML = '<h2>Performance concerns</h2><div class="panel empty">The daily tracker has not been run yet.</div>'; return; }
-  var LIM = D.tr.perfMs || 3000;
-  var byId = {}; D.tr.cases.forEach(function(c){ byId[c.id] = c; });
-  var all = (D.tr.pages || []).filter(function(p){ return p.caseId; });
-  var slow = all.filter(function(p){ return p.ms > LIM || !p.ok || p.tries > 1; }).sort(function(a,b){ return (b.ms + b.waitedMs) - (a.ms + a.waitedMs); });
-  var cases = []; slow.forEach(function(p){ if (cases.indexOf(p.caseId) < 0) cases.push(p.caseId); });
-  var h = '<h2>Performance concerns</h2><p class="lead">Steps of the daily tracker test cases that took <b>more than ' + (LIM/1000) + ' s</b> to load a page or show results (passed and failed cases alike). Times are measured in the test browser: <b>Page load</b> = until the page has loaded; <b>Results shown</b> = from the shopper’s action (Search, a filter, opening a list) until the results are on screen; <b>3D model</b> = until the 3D viewer draws the ring. When the store answered “too many requests” or did not answer, the test waited and tried again; that wait is shown separately.</p>' +
-    '<div class="grid"><div class="tile WARN"><div class="n">' + cases.length + '</div><div class="l">Test cases with a slow step</div><div class="h">of ' + D.tr.cases.filter(function(c){ return c.s!=='SKIPPED'; }).length + ' automated cases</div></div><div class="tile WARN"><div class="n">' + slow.length + '</div><div class="l">Slow steps</div><div class="h">of ' + all.length + ' timed steps</div></div><div class="tile FAIL"><div class="n">' + slow.filter(function(p){ return !p.ok || p.tries > 1; }).length + '</div><div class="l">Store busy or no answer</div><div class="h">opened only after waiting, or not at all</div></div></div>';
-  if (!slow.length) { el.innerHTML = h + '<div class="panel empty" style="margin-top:16px">Every step loaded within ' + (LIM/1000) + ' s.</div>'; return; }
-  h += '<div class="panel tbl" style="margin-top:16px"><table><thead><tr><th>Test case</th><th>Result</th><th>What was slow</th><th>Address</th><th style="text-align:right">Time</th><th style="text-align:right">Waited (busy)</th></tr></thead><tbody>' +
+function perfSlow(J){
+  var LIM = J.perfMs || 3000;
+  return (J.pages || []).filter(function(p){ return p.caseId && (p.ms > LIM || !p.ok || p.tries > 1); }).sort(function(a,b){ return (b.ms + b.waitedMs) - (a.ms + a.waitedMs); });
+}
+function perfHtml(J){
+  var LIM = J.perfMs || 3000, slow = perfSlow(J);
+  var byId = {}; J.cases.forEach(function(c){ byId[c.id] = c; });
+  var h = '<p class="small" style="margin:6px 0 12px">Steps that took <b>more than ' + (LIM/1000) + ' s</b>, in passed and failed cases alike. <b>Page load</b> = until the page has loaded; <b>Results shown</b> = from the shopper’s action (Search, a filter, opening a list) until the results are on screen; <b>3D model</b> = until the 3D viewer draws the ring. When the store was busy (“too many requests” or no answer) the test waited and tried again; that wait is shown separately.</p>';
+  if (!slow.length) return h + '<div class="panel empty">Every step loaded within ' + (LIM/1000) + ' s.</div>';
+  return h + '<div class="panel tbl"><table><thead><tr><th>Test case</th><th>Result</th><th>What was slow</th><th>Address</th><th style="text-align:right">Time</th><th style="text-align:right">Waited (busy)</th></tr></thead><tbody>' +
     slow.map(function(p){
       var c = byId[p.caseId] || { t: '', s: 'PASS' };
       var res = !p.ok ? '<div class="small" style="color:var(--fail)">Did not open' + (p.status ? ' (' + p.status + ')' : '') + '</div>' : p.tries > 1 ? '<div class="small" style="color:var(--warn)">Busy: opened on try ' + p.tries + '</div>' : '';
-      return '<tr><td class="lbl" style="white-space:nowrap">' + e(p.caseId) + '<div class="small">' + e(c.t) + '</div></td><td>' + pill(c.s) + '</td><td>' + e(p.kind || 'Page load') + ': ' + e(p.name) + res + '</td><td class="small">' + link(p.url) + '</td><td style="text-align:right;font-weight:600;color:' + (p.ms > LIM * 2 ? 'var(--fail)' : 'var(--warn)') + '">' + secs(p.ms) + '</td><td style="text-align:right">' + (p.waitedMs ? secs(p.waitedMs) : '–') + '</td></tr>';
+      return '<tr><td class="lbl" style="white-space:nowrap">' + e(p.caseId) + '<div class="small">' + e(c.t) + '</div></td><td>' + pill(c.s) + '</td><td>' + e(p.kind || 'Page load') + ': ' + e(p.name) + res + '</td><td class="small">' + link(p.url) + '</td><td style="text-align:right;white-space:nowrap;font-weight:600;color:' + (p.ms > LIM * 2 ? 'var(--fail)' : 'var(--warn)') + '">' + secs(p.ms) + '</td><td style="text-align:right">' + (p.waitedMs ? secs(p.waitedMs) : '–') + '</td></tr>';
     }).join('') + '</tbody></table></div>';
-  el.innerHTML = h;
-})();
+}
 
 // ---------- TEST CASES (Phase 2) and DAILY TRACKER — same table, two tabs
 function caseTab(tabId, px, J, title, lead, empty){
@@ -600,7 +596,7 @@ function caseTab(tabId, px, J, title, lead, empty){
     h += '<button class="tile ' + s + '" data-go="' + s + '"><div class="n">' + n + '</div><div class="l">' + e(NAMES[s]) + '</div><div class="h">' + e({FAIL:'The store did not do what the test case expects.',WARN:'Works; something is worth a look (see the reason).',BLOCKED:'The test could not decide (for example no stock to check). See the reason.',PASS:'Works as the test case expects.',SKIPPED:'Manual testing or nothing to test right now; the reason is shown.'}[s]) + '</div></button>';
   });
   h += '</div><div class="controls" id="' + px + 'tcStatus" style="margin-top:18px"></div><div class="controls"><select id="' + px + 'tcArea" aria-label="Area"></select><input type="search" id="' + px + 'tcQ" placeholder="Find by ID or words…" aria-label="Find a test case"></div>' +
-    '<div class="panel tbl"><table><thead><tr><th>ID</th><th>Result</th><th>Test case</th><th class="hide-s">Expected result</th><th>What happened</th></tr></thead><tbody id="' + px + 'tcBody"></tbody></table></div>';
+    '<div class="panel tbl" id="' + px + 'tcTable"><table><thead><tr><th>ID</th><th>Result</th><th>Test case</th><th class="hide-s">Expected result</th><th>What happened</th></tr></thead><tbody id="' + px + 'tcBody"></tbody></table></div><div id="' + px + 'tcPerf" style="display:none"></div>';
   el.innerHTML = h;
   var areas = []; C.forEach(function(c){ if (areas.indexOf(c.area) < 0) areas.push(c.area); });
   var sel = document.getElementById(px + 'tcArea');
@@ -611,8 +607,12 @@ function caseTab(tabId, px, J, title, lead, empty){
   function render(){
     var base = C.filter(function(c){ return (CS.area==='all' || c.area===CS.area) && (!CS.q || (c.id + ' ' + c.t + ' ' + c.exp + ' ' + c.act + ' ' + c.why.join(' ')).toLowerCase().indexOf(CS.q) >= 0); });
     var st = document.getElementById(px + 'tcStatus');
-    st.innerHTML = ['all','FAIL','WARN','BLOCKED','PASS','SKIPPED'].map(function(s){ var n = base.filter(function(c){ return s==='all' || c.s===s; }).length; return '<button class="chip" data-s="' + s + '" aria-pressed="' + (CS.s===s) + '">' + e(s==='all' ? 'All' : NAMES[s]) + '<span class="c">' + n + '</span></button>'; }).join('');
+    st.innerHTML = ['all','FAIL','WARN','BLOCKED','PASS','SKIPPED'].map(function(s){ var n = base.filter(function(c){ return s==='all' || c.s===s; }).length; return '<button class="chip" data-s="' + s + '" aria-pressed="' + (CS.s===s) + '">' + e(s==='all' ? 'All' : NAMES[s]) + '<span class="c">' + n + '</span></button>'; }).join('') +
+      (J.pages ? '<button class="chip" data-s="PERF" aria-pressed="' + (CS.s==='PERF') + '">Performance concerns<span class="c">' + perfSlow(J).length + '</span></button>' : '');
     st.querySelectorAll('button').forEach(function(b){ b.onclick = function(){ CS.s = b.getAttribute('data-s'); render(); }; });
+    var perfBox = document.getElementById(px + 'tcPerf'), table = document.getElementById(px + 'tcTable');
+    if (CS.s === 'PERF') { table.style.display = 'none'; perfBox.style.display = ''; perfBox.innerHTML = perfHtml(J); return; }
+    table.style.display = ''; perfBox.style.display = 'none';
     var rows = base.filter(function(c){ return CS.s==='all' || c.s===CS.s; });
     document.getElementById(px + 'tcBody').innerHTML = rows.map(function(c){
       var what = (c.act ? '<div>' + e(c.act) + '</div>' : '') + (c.why.length ? '<div style="color:' + (c.s==='FAIL' ? 'var(--fail)' : 'var(--muted)') + ';margin-top:4px">' + c.why.map(e).join('<br>') + '</div>' : '');
@@ -631,7 +631,7 @@ function caseTab(tabId, px, J, title, lead, empty){
   }
   render();
 }
-caseTab('t-tracker', 'tr', D.tr, 'Daily tracker', 'The daily monitoring tracker (TC-01 to TC-33), run like a shopper: menus, search, filters, product pages, Ring Builder both ways and Diamond Search, each flow ending in the cart. Manual / skipped cases show their reason. Slow steps are listed in the Performance concerns tab.', 'The daily tracker tests have not been run yet. On the run page choose <b>Daily tracker tests</b> (or run <code>npm run qa:tracker</code>).');
+caseTab('t-tracker', 'tr', D.tr, 'Daily tracker', 'The daily monitoring tracker (TC-01 to TC-33), run like a shopper: menus, search, filters, product pages, Ring Builder both ways and Diamond Search, each flow ending in the cart. Manual / skipped cases show their reason. Steps over 3 s are under Performance concerns.', 'The daily tracker tests have not been run yet. On the run page choose <b>Daily tracker tests</b> (or run <code>npm run qa:tracker</code>).');
 
 var start = (location.hash || '').slice(1);
 show(TABS.some(function(t){ return t[0]===start; }) ? start : TABS[0][0]);
