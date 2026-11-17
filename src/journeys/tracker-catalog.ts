@@ -1,6 +1,6 @@
 // Daily monitoring tracker ("Shopify Demo Monitoring Tracker"). TC-26, TC-29 and TC-30 stay manual
 // (checkout, contact form and newsletter submit real data), so they are listed but never run.
-export interface TrackerDef { id: string; area: string; title: string; steps: string; expected: string; priority: string; manual: boolean }
+export interface TrackerDef { id: string; area: string; title: string; steps: string; expected: string; priority: string; manual: boolean; manualReason?: string }
 
 export const TRACKER: TrackerDef[] = [
  {
@@ -172,7 +172,7 @@ export const TRACKER: TrackerDef[] = [
   "steps": "Take our Quiz → answer all questions",
   "expected": "Recommendations page shows matching rings",
   "priority": "P1",
-  "manual": false
+  "manual": true, "manualReason": "Take our Quiz is disabled on the store, so it is tested manually"
  },
  {
   "id": "TC-20",
@@ -235,7 +235,7 @@ export const TRACKER: TrackerDef[] = [
   "steps": "Cart → Check out; enter test email and US address",
   "expected": "Shopify checkout loads; shipping options and totals shown. Stop before payment.",
   "priority": "P1",
-  "manual": true
+  "manual": true, "manualReason": "Checkout: not automated, so no order is placed"
  },
  {
   "id": "TC-29",
@@ -244,7 +244,7 @@ export const TRACKER: TrackerDef[] = [
   "steps": "Open form; check fields and reCAPTCHA",
   "expected": "First/Last name, Company, Phone, Email, Comments and reCAPTCHA render; submit once a week with \"TEST – ignore\"",
   "priority": "P1",
-  "manual": true
+  "manual": true, "manualReason": "Submits a real contact request"
  },
  {
   "id": "TC-30",
@@ -253,7 +253,7 @@ export const TRACKER: TrackerDef[] = [
   "steps": "Enter a test email, Sign up",
   "expected": "Success message shown",
   "priority": "P1",
-  "manual": true
+  "manual": true, "manualReason": "Creates a real newsletter sign-up"
  },
  {
   "id": "TC-31",

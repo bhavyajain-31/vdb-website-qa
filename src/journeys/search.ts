@@ -4,7 +4,7 @@ import type { Config } from '../config.js';
 import { gotoSettled, settle } from '../browser.js';
 import { Case, Suite, StepError, fmt$, isVisible, journeyContext, list, money, must, visible, watchDialogs } from './harness.js';
 
-interface Product { title: string; price?: number; soldOut: boolean }
+export interface Product { title: string; price?: number; soldOut: boolean; href: string; handle: string; img: string; imgOk: boolean }
 
 export async function openSearch(page: Page, cfg: Config, c: Case, fresh = true) {
   if (fresh) {
@@ -25,17 +25,41 @@ export async function submitSearch(page: Page, cfg: Config, c: Case, term: strin
   await settle(page, 600);
 }
 
+/** Product cards on a search or collection page (testimonials and other blocks without a price are ignored). */
 export async function products(page: Page): Promise<Product[]> {
-  return page.$$eval('#product-grid > li, ul.product-grid > li', els => els.filter(e => (e as HTMLElement).offsetWidth > 0).map(e => {
-    const sale = e.querySelector('.price--on-sale .price-item--sale');
-    const reg = e.querySelector('.price__regular .price-item--regular, .price-item--regular');
-    const priceText = (sale ?? reg)?.textContent ?? '';
-    return {
-      title: (e.querySelector('.card__heading a, .card__heading, h3')?.textContent ?? '').replace(/\s+/g, ' ').trim(),
-      priceText,
-      soldOut: /sold out/i.test(e.querySelector('.badge, .card__badge')?.textContent ?? ''),
-    };
-  })).then(xs => xs.map(x => ({ title: x.title, price: money(x.priceText), soldOut: x.soldOut })));
+  const raw = await page.evaluate(() => {
+    const seen = new Set<string>();
+    const out: { title: string; priceText: string; soldOut: boolean; href: string; img: string; imgOk: boolean }[] = [];
+    for (const a of document.querySelectorAll('#MainContent a[href*="/products/"]')) {
+      const card = a.closest('.card-wrapper, #product-grid > li, .product-grid > li, .grid__item') as HTMLElement | null;
+      if (!card || !card.offsetWidth || !card.querySelector('.price')) continue;
+      const href = (a as HTMLAnchorElement).href.split('?')[0];
+      if (seen.has(href)) continue;
+      seen.add(href);
+      const priceBox = card.querySelector('.price') as HTMLElement;
+      const sale = priceBox.classList.contains('price--on-sale') ? priceBox.querySelector('.price-item--sale') : null;
+      const reg = priceBox.querySelector('.price__regular .price-item--regular, .price-item--regular');
+      const im = card.querySelector('img') as HTMLImageElement | null;
+      out.push({
+        title: (card.querySelector('.card__heading a, .card__heading, h3')?.textContent ?? a.textContent ?? '').replace(/\s+/g, ' ').trim(),
+        priceText: (sale ?? reg)?.textContent ?? '',
+        soldOut: /sold out/i.test(card.querySelector('.badge, .card__badge')?.textContent ?? ''),
+        href, img: im ? (im.currentSrc || im.src) : '', imgOk: !!im && im.complete && im.naturalWidth > 0,
+      });
+    }
+    return out;
+  });
+  return raw.map(x => ({ title: x.title, price: money(x.priceText), soldOut: x.soldOut, href: x.href, handle: x.href.match(/\/products\/([^/?#]+)/)?.[1] ?? '', img: x.img, imgOk: x.imgOk }));
+}
+
+/** Scrolls the page so lazy images load, then waits a moment. */
+export async function loadAllImages(page: Page) {
+  await page.evaluate(async () => {
+    document.querySelectorAll('img[loading="lazy"]').forEach(i => i.setAttribute('loading', 'eager'));
+    for (let y = 0; y < document.body.scrollHeight; y += 600) { window.scrollTo(0, y); await new Promise(r => setTimeout(r, 100)); }
+    window.scrollTo(0, 0);
+  });
+  await page.waitForFunction(() => [...document.querySelectorAll('#MainContent img')].every(i => (i as HTMLImageElement).complete), null, { timeout: 15_000 }).catch(() => {});
 }
 
 /** Waits for the results grid to refresh after a filter or sort change (the theme swaps the grid in place). */
@@ -60,22 +84,22 @@ export async function openFacet(page: Page, name: string) {
 }
 
 
-export interface ProductData { handle: string; title: string; available: boolean; options: string[]; variants: { title: string; available: boolean; price: number; options: string[] }[] }
+export interface ProductData { handle: string; title: string; available: boolean; options: string[]; images: string[]; variants: { title: string; available: boolean; price: number; options: string[] }[] }
 
 /** The products behind the result cards, read from the store (the same data the product page shows). */
 export async function productData(page: Page): Promise<ProductData[]> {
-  return page.evaluate(async () => {
-    const handles = [...new Set([...document.querySelectorAll('#product-grid > li a[href*="/products/"], ul.product-grid > li a[href*="/products/"]')]
-      .map(a => (a.getAttribute('href') ?? '').match(/\/products\/([^/?#]+)/)?.[1]).filter(Boolean) as string[])];
+  const handles = [...new Set((await products(page)).map(p => p.handle).filter(Boolean))];
+  return page.evaluate(async handles => {
     const out = await Promise.all(handles.map(async h => {
       try {
         const j = await (await fetch(`/products/${h}.js`)).json();
         return { handle: h, title: j.title, available: !!j.available, options: (j.options ?? []).map((o: any) => typeof o === 'string' ? o : o.name),
+          images: (j.images ?? []) as string[],
           variants: (j.variants ?? []).map((v: any) => ({ title: v.title, available: !!v.available, price: v.price / 100, options: v.options ?? [v.option1, v.option2, v.option3].filter(Boolean) })) };
       } catch { return null; }
     }));
     return out.filter(Boolean) as any;
-  });
+  }, handles);
 }
 
 /** Does the product really come in this metal? (a variant whose "Metal …" option is that value) */

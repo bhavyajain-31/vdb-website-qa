@@ -35,10 +35,15 @@ export interface CaseResult {
   testedAt: string;
 }
 
+/** One page the tests opened, with how long it took (for the speed list). */
+export interface PageLoad { url: string; name: string; ms: number; status?: number; tries: number; waitedMs: number; at: string; ok: boolean; note?: string }
+
 export interface JourneyReport {
   phase: string;
   startedAt: string;
   finishedAt: string;
   durationMs: number;
   cases: CaseResult[];
+  /** Pages opened, with load times (daily tracker). */
+  pages?: PageLoad[];
 }

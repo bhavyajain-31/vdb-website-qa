@@ -56,6 +56,7 @@ export function renderDashboard(r: RunReport, cfg: Config): string {
     tr: r.tracker ? {
       phase: r.tracker.phase, at: r.tracker.startedAt, ms: r.tracker.durationMs,
       cases: r.tracker.cases.map(c => ({ id: c.id, area: c.area, t: c.title, steps: c.steps, exp: c.expected, pr: c.priority, known: c.known, s: c.status, act: c.actual, why: c.reasons, log: c.log, url: c.url, shot: c.screenshot, at: c.testedAt, ms: c.ms })),
+      pages: r.tracker.pages ?? [],
     } : null,
   };
   const json = JSON.stringify(data).replace(/</g, '\\u003c');
@@ -535,6 +536,43 @@ renderLinks();
   }
   document.getElementById('imQ').oninput = function(){ IS.q = this.value.toLowerCase(); IS.page = 0; render(); };
   render();
+})();
+
+// ---------- SCREENSHOTS open in a viewer on this page (browsers block opening embedded images in a new tab)
+(function(){
+  var box = document.createElement('div');
+  box.id = 'shotView';
+  box.setAttribute('role', 'dialog');
+  box.style.cssText = 'display:none;position:fixed;inset:0;z-index:9999;background:rgba(10,8,14,.82);align-items:center;justify-content:center;padding:24px;cursor:zoom-out';
+  box.innerHTML = '<div style="position:relative;max-width:96vw;max-height:92vh"><img alt="Screenshot" style="max-width:96vw;max-height:88vh;display:block;border-radius:8px;background:#fff"><div style="color:#fff;font-size:13px;margin-top:8px;text-align:center">Click anywhere or press Esc to close · <a style="color:#fff" target="_blank" download="screenshot.jpg">Download</a></div></div>';
+  document.body.appendChild(box);
+  function close(){ box.style.display = 'none'; }
+  box.addEventListener('click', function(ev){ if (!ev.target.closest('a')) close(); });
+  document.addEventListener('keydown', function(ev){ if (ev.key === 'Escape') close(); });
+  document.addEventListener('click', function(ev){
+    var a = ev.target.closest && ev.target.closest('a[href]');
+    if (!a || ev.ctrlKey || ev.metaKey) return;
+    var href = a.getAttribute('href') || '';
+    if (href.indexOf('data:image/') !== 0 && !/(^|\\/)screenshots\\/[^?#]+\\.(jpe?g|png)$/i.test(href)) return;
+    ev.preventDefault();
+    box.querySelector('img').src = href;
+    box.querySelector('a').href = href;
+    box.style.display = 'flex';
+  }, true);
+})();
+
+// ---------- SPEED: pages opened by the daily tracker (Homepage & speed tab)
+(function(){
+  if (!D.tr || !D.tr.pages || !D.tr.pages.length) return;
+  var P = D.tr.pages.slice().sort(function(a,b){ return (b.ms + b.waitedMs) - (a.ms + a.waitedMs); });
+  var slow = P.filter(function(p){ return p.ms > 8000 || p.tries > 1 || !p.ok; });
+  var h = '<h2 style="margin-top:34px">Pages opened by the daily tracker</h2><p class="lead">Every page the daily tracker opened (run ' + e(new Date(D.tr.at).toLocaleString()) + '), slowest first. When the store was busy (“too many requests” or no answer), the test waited and tried again instead of giving up; the wait is shown. ' + slow.length + ' of ' + P.length + ' pages were slow (over 8 s), busy or did not open.</p>' +
+    '<div class="panel tbl"><table><thead><tr><th>Page</th><th>Address</th><th style="text-align:right">Load time</th><th style="text-align:right">Tries</th><th style="text-align:right">Waited</th><th>Result</th></tr></thead><tbody>' +
+    P.map(function(p){
+      var res = !p.ok ? '<span style="color:var(--fail);font-weight:600">Did not open' + (p.status ? ' (' + p.status + ')' : '') + '</span>' : p.tries > 1 ? '<span style="color:var(--warn);font-weight:600">Opened after the store was busy</span>' : p.ms > 8000 ? '<span style="color:var(--warn);font-weight:600">Slow</span>' : 'OK';
+      return '<tr><td class="lbl">' + e(p.name) + '</td><td class="small">' + link(p.url) + '</td><td style="text-align:right">' + secs(p.ms) + '</td><td style="text-align:right">' + p.tries + '</td><td style="text-align:right">' + (p.waitedMs ? secs(p.waitedMs) : '–') + '</td><td>' + res + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+  document.getElementById('t-home').insertAdjacentHTML('beforeend', h);
 })();
 
 // ---------- TEST CASES (Phase 2) and DAILY TRACKER — same table, two tabs

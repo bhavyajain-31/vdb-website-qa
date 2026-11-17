@@ -54,8 +54,8 @@ export class DS {
   /** Presses Search (or runs `action`) and waits for the results the app shows. */
   async search(c: Case | undefined, action?: () => Promise<unknown>, what = 'pressing Search', pred: (r: Response) => boolean = isPage1): Promise<SearchResult> {
     c?.step(what.replace(/^pressing/, 'Press'));
-    const countWait = this.page.waitForResponse(isCount, { timeout: 30_000 }).catch(() => null);
-    const r = await during(this.page, pred, action ?? (() => this.page.locator('a.vdb-search-diamond-data-wrap').locator('visible=true').first().click()), what);
+    const countWait = this.page.waitForResponse(isCount, { timeout: 45_000 }).catch(() => null);
+    const r = await during(this.page, pred, action ?? (() => this.page.locator('a.vdb-search-diamond-data-wrap').locator('visible=true').first().click()), what, 45_000);
     const items = await diamondsOf(r);
     const cr = await countWait;
     let total: number | undefined;
@@ -63,8 +63,11 @@ export class DS {
     await this.page.waitForFunction(() => {
       const el = [...document.querySelectorAll('#search_diamond_count')].find(e => (e as HTMLElement).offsetParent) as HTMLElement | undefined;
       const cover = document.querySelector('#main_page_cover') as HTMLElement | null;
-      return !!el && /\d/.test(el.innerText) && (!cover || getComputedStyle(cover).display === 'none');
-    }, null, { timeout: 25_000 }).catch(() => { throw new StepError(`Results did not appear after ${what}`); });
+      const idle = !cover || getComputedStyle(cover).display === 'none';
+      // on a phone the count can sit in a collapsed bar: result cards on screen count too
+      const cards = [...document.querySelectorAll('.vdb-search-result-block')].some(e => (e as HTMLElement).offsetWidth > 0);
+      return idle && ((!!el && /\d/.test(el.innerText)) || cards);
+    }, null, { timeout: 45_000 }).catch(() => { throw new StepError(`Results did not appear after ${what}`); });
     await this.page.waitForTimeout(600);
     const shown = await this.shownCount();
     return { total: shown ?? total, items, req: post(r) };

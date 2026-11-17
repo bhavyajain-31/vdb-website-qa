@@ -11,9 +11,9 @@ import { Suite } from './harness.js';
 import type { CaseResult, JourneyReport } from './types.js';
 import { lastReportFile, loadJourneys, loadTracker, trackerFile } from './store.js';
 import { TRACKER } from './tracker-catalog.js';
-import { defineTracker, trackerDiamonds, trackerHome, trackerMobile, trackerSettingFirst, trackerShop, trackerStoneFirst, TRACKER_GROUPS } from './tracker.js';
+import { PAGES, defineTracker, trackerDiamonds, trackerHome, trackerMobile, trackerSettingFirst, trackerShop, trackerStoneFirst, TRACKER_GROUPS } from './tracker.js';
 
-const STATUS: Record<string, string> = { PASS: 'Passed', WARN: 'Passed with warnings', FAIL: 'Failed', BLOCKED: "Couldn't verify", SKIPPED: 'Manual (not automated)', PENDING: 'Not run' };
+const STATUS: Record<string, string> = { PASS: 'Passed', WARN: 'Passed with warnings', FAIL: 'Failed', BLOCKED: "Couldn't verify", SKIPPED: 'Manual testing', PENDING: 'Not run' };
 const csvCell = (v: string) => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 
 /** A new, standalone results file for this run (it does not follow or touch the tracker sheet). */
@@ -22,7 +22,7 @@ export function trackerCsv(jr: JourneyReport): { name: string; text: string } {
   const head = ['Test ID', 'Flow', 'Test case', 'Steps', 'Expected result', 'Result', 'What happened', 'Reason', 'Tested at', 'Screenshot'];
   const rows = TRACKER.map(t => {
     const r = jr.cases.find(x => x.id === t.id);
-    return [t.id, t.area, t.title, t.steps, t.expected, STATUS[t.manual ? 'SKIPPED' : r?.status ?? 'PENDING'], r?.actual ?? '', (r?.reasons ?? []).join(' | '), r?.testedAt ? ist(r.testedAt) : '', r?.screenshot ?? ''];
+    return [t.id, t.area, t.title, t.steps, t.expected, STATUS[t.manual ? 'SKIPPED' : r?.status ?? 'PENDING'], t.manual ? `Manual testing: ${t.manualReason ?? 'not automated'}` : r?.actual ?? '', (r?.reasons ?? []).join(' | '), r?.testedAt ? ist(r.testedAt) : '', r?.screenshot ?? ''];
   });
   const text = [head, ...rows].map(r => r.map(c => csvCell(String(c ?? ''))).join(',')).join('\n') + '\n';
   return { name: 'daily-tracker-results.csv', text };
@@ -44,7 +44,7 @@ async function main() {
     { name: 'Homepage, menus, content', ids: TRACKER_GROUPS.home, run: () => trackerHome(browser, cfg, suite) },
     { name: 'Phone screen', ids: TRACKER_GROUPS.mobile, run: () => trackerMobile(browser, cfg, suite) },
   ].filter(g => !cfg.only || g.ids.some(id => cfg.only!.test(id)));
-  const parallel = Math.max(1, Math.min(4, cfg.concurrency));
+  const parallel = Math.max(1, Math.min(3, cfg.concurrency)); // 3 at a time: the store answers 'too many requests' above that
   console.log(`Daily tracker: ${TRACKER.filter(t => !t.manual).length} automated cases in ${groups.length} groups, ${parallel} at a time`);
   try {
     const queue = [...groups];
@@ -59,10 +59,10 @@ async function main() {
 
   const prev = loadTracker(cfg);
   const cases: CaseResult[] = TRACKER.map(t => {
-    if (t.manual) return { id: t.id, area: t.area, title: t.title, steps: t.steps, expected: t.expected, priority: t.priority, known: '', status: 'SKIPPED', actual: 'Manual: not automated, because it would submit real data.', reasons: [], log: [], ms: 0, testedAt: startedAt };
+    if (t.manual) return { id: t.id, area: t.area, title: t.title, steps: t.steps, expected: t.expected, priority: t.priority, known: '', status: 'SKIPPED', actual: `Manual testing: ${t.manualReason ?? 'not automated'}.`, reasons: [], log: [], ms: 0, testedAt: startedAt };
     return suite.results.get(t.id) ?? prev?.cases.find(r => r.id === t.id);
   }).filter(Boolean) as CaseResult[];
-  const jr: JourneyReport = { phase: 'Daily tracker', startedAt, finishedAt: new Date().toISOString(), durationMs: Date.now() - t0, cases };
+  const jr: JourneyReport = { phase: 'Daily tracker', startedAt, finishedAt: new Date().toISOString(), durationMs: Date.now() - t0, cases, pages: PAGES };
   fs.mkdirSync(path.dirname(trackerFile(cfg)), { recursive: true });
   fs.writeFileSync(trackerFile(cfg), JSON.stringify(jr, null, 1));
 

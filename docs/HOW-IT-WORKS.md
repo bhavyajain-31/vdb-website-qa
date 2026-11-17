@@ -309,15 +309,20 @@ The tracker sheet's cases run as one suite, separate from the link check and Pha
 - **GitHub:** choose `tracker-tests`.
 - **On your computer:** `npm run qa:tracker`.
 
-TC-26 (checkout), TC-29 (contact form) and TC-30 (newsletter) are listed as *Untested / manual*, because they would submit real data.
+Four cases are listed as **Manual testing**:
+
+- TC-19, because the quiz is disabled on the store.
+- TC-26 (checkout), TC-29 (contact form) and TC-30 (newsletter), because they would submit real data.
+
+**When the store is slow or busy:** if a page answers "too many requests" (429) or does not answer, the test waits 15 s, 30 s, then 45 s and tries again, instead of giving up. Searches wait up to 45 s for results, and the 3D model up to 60 s. Every page the tracker opened is listed with its load time, tries and waiting time in the **Homepage & speed** tab, under "Pages opened by the daily tracker".
 
 | Area | Cases | Flow checked |
 | --- | --- | --- |
 | Home & menus | TC-01, 02, 03, 31, 33 | Load time, hero, carousels, footer and broken images. Every mega menu opens with links. One link per menu column opens a real page. About and policy pages, FAQ answers expand, social icons open in a new tab. The header and footer "Create Ring with Natural" links land on the same page. |
-| Search & shop | TC-04, 05, 21–25 | "halo ring" shows halo rings and opens the product. "xyz123" shows the no-results message. Collections show image, name and the correct "From" price. The collection metal filter is checked on every product's options, plus price sort. Product page: each option change shows that option's price and image. Sold-out band cannot be added. Cart: add, quantity 2 (totals update), remove, then "Your cart is empty". |
+| Search & shop | TC-04, 05, 21–25 | Type "halo ring", pick the matching suggestion and press Enter. The results must be halo rings, every card must show the product's own picture, and the product opened must show its own picture. "xyz123" shows the no-results message. Collections show image, name and the correct "From" price. The collection metal filter is checked on every product's options, plus price sort. Product page: each option change shows that option's price and image. Sold-out band cannot be added. Cart: add, quantity 2 (totals update), remove, then "Your cart is empty". |
 | Diamond Search | TC-06–12 | Menu → Search Diamonds → results. Oval / 1–2 ct / G–H / VS1–VS2 / price, with every diamond checked. Sort options do not overlap, price order is correct, scrolling loads more. Detail page contents. Lab-grown search and its filters. Every shape shortcut and every coloured-diamond menu link shows only that shape or colour. |
 | Ring Builder | TC-13–17 | Gemstones load with images and prices. Stone first: stone → setting (must support the stone's shape) → metal and ring size → completed ring (subtotal = stone + setting) → **Add to cart** (both parts, linked, correct total). Lab-grown and gemstone starts keep the stone. Setting first: setting → only compatible stones offered → stone → completed ring (ring size kept) → **Add to cart**. |
-| 3D, quiz, configurators | TC-18–20 | The 3D model renders, rotates when dragged, and updates on metal and shape changes. The quiz is answered to its recommendations. Configure Rings and Configure Fine Jewelry: image, stock number and price change with metal and shape. |
+| 3D, configurators | TC-18, 20 | The 3D model renders (waits up to 60 s), rotates when dragged, and updates on metal and shape changes. Configure Rings and Configure Fine Jewelry: image, stock number and price change with metal and shape. |
 | Phone | TC-32 | On a 390 px screen: pages fit (no sideways scroll), the menu opens, Diamond Search shows results, product to cart works. |
 
 **Output**
