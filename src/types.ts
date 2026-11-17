@@ -299,6 +299,8 @@ export interface RunReport {
   stoppedReason?: string;
   /** Phase 2 test cases (latest run of npm run qa:phase2). */
   journeys?: import('./journeys/types.js').JourneyReport;
+  /** 'tracker' = a daily tracker report (only its own tabs); default = link-check report. */
+  view?: 'links' | 'tracker';
   /** Daily monitoring tracker (latest run of npm run qa:tracker). */
   tracker?: import('./journeys/types.js').JourneyReport;
 }

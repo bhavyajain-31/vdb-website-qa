@@ -314,7 +314,7 @@ Four cases are listed as **Manual testing**:
 - TC-19, because the quiz is disabled on the store.
 - TC-26 (checkout), TC-29 (contact form) and TC-30 (newsletter), because they would submit real data.
 
-**When the store is slow or busy:** if a page answers "too many requests" (429) or does not answer, the test waits 15 s, 30 s, then 45 s and tries again, instead of giving up. Searches wait up to 45 s for results, and the 3D model up to 60 s. Every page the tracker opened is listed with its load time, tries and waiting time in the **Homepage & speed** tab, under "Pages opened by the daily tracker".
+**When the store is slow or busy:** if a page answers "too many requests" (429) or does not answer, the test waits 15 s, 30 s, then 45 s and tries again, instead of giving up. Searches wait up to 45 s for results, and the 3D model up to 60 s. Steps that took **more than 3 s** are listed in the tracker report's **Performance concerns** tab. Each row gives the test case, its result, what was slow (page load, results shown or 3D model), the address, the time and any waiting because the store was busy.
 
 | Area | Cases | Flow checked |
 | --- | --- | --- |
@@ -322,7 +322,7 @@ Four cases are listed as **Manual testing**:
 | Search & shop | TC-04, 05, 21–25 | Type "halo ring", pick the matching suggestion and press Enter. The results must be halo rings, every card must show the product's own picture, and the product opened must show its own picture. "xyz123" shows the no-results message. Collections show image, name and the correct "From" price. The collection metal filter is checked on every product's options, plus price sort. Product page: each option change shows that option's price and image. Sold-out band cannot be added. Cart: add, quantity 2 (totals update), remove, then "Your cart is empty". |
 | Diamond Search | TC-06–12 | Menu → Search Diamonds → results. Oval / 1–2 ct / G–H / VS1–VS2 / price, with every diamond checked. Sort options do not overlap, price order is correct, scrolling loads more. Detail page contents. Lab-grown search and its filters. Every shape shortcut and every coloured-diamond menu link shows only that shape or colour. |
 | Ring Builder | TC-13–17 | Gemstones load with images and prices. Stone first: stone → setting (must support the stone's shape) → metal and ring size → completed ring (subtotal = stone + setting) → **Add to cart** (both parts, linked, correct total). Lab-grown and gemstone starts keep the stone. Setting first: setting → only compatible stones offered → stone → completed ring (ring size kept) → **Add to cart**. |
-| 3D, configurators | TC-18, 20 | The 3D model renders (waits up to 60 s), rotates when dragged, and updates on metal and shape changes. Configure Rings and Configure Fine Jewelry: image, stock number and price change with metal and shape. |
+| 3D, configurators | TC-18, 20 | The 3D model renders (waits up to 60 s), rotates when dragged, and updates on metal and shape changes. Configurators are opened from their real links (Engagement Rings › Configure Rings, Fine Jewelry › Configure Rings, homepage CONFIGURE FINE JEWELRY). On the first product, every variation (shape, size, metal colour, head and shank metal colour) is changed in turn: the stock number and picture must change, the price must change with the metal, and Open 3D 360° must draw the ring. Configure Rings and Configure Fine Jewelry: image, stock number and price change with metal and shape. |
 | Phone | TC-32 | On a 390 px screen: pages fit (no sideways scroll), the menu opens, Diamond Search shows results, product to cart works. |
 
 **Output**
@@ -330,3 +330,8 @@ Four cases are listed as **Manual testing**:
 - The **Daily tracker** tab in the dashboard.
 - A new file, `daily-tracker-results.csv`, with one row per TC: test case, steps, expected result, **Result** (Passed / Passed with warnings / Failed / Couldn't verify / Manual), what happened, reason, time tested (India time) and screenshot.
 - It is a separate file. The tool never opens or changes your tracker sheet.
+
+**A daily tracker report stands on its own.** It has two tabs, **Daily tracker** and **Performance concerns**, and does not include the Phase 1 tabs (Summary, Homepage & speed, Deeplinks, Images). A link-check report has only the Phase 1 tabs.
+
+- **TC-24:** when no wedding band is sold out, it is shown as **Skipped** with that reason.
+- **TC-25:** when the cart says "Only 1 item was added … due to availability", that is the correct behaviour, so it **passes**.

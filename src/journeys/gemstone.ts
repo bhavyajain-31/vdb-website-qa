@@ -2,7 +2,7 @@
 import type { Browser, Page, Response } from 'playwright';
 import type { Config } from '../config.js';
 import { gotoSettled } from '../browser.js';
-import { Case, Suite, StepError, during, forgetFilters, fmt$, isVisible, journeyContext, list, money, must, visible, watchDialogs } from './harness.js';
+import { Case, Suite, StepError, during, forgetFilters, recordPerf, fmt$, isVisible, journeyContext, list, money, must, visible, watchDialogs } from './harness.js';
 
 const GS_PATH = (gem: string) => `apps/vdb-app/gemstone?&gem_type=${gem}`;
 
@@ -32,12 +32,14 @@ export class GS {
   async open(c: Case | undefined, gem = 'Ruby') {
     c?.step(`Open GEMSTONES › ${gem}`);
     if (this.page.url().startsWith(this.cfg.baseUrl)) await forgetFilters(this.page);
+    const t0 = Date.now();
     const listWait = this.page.waitForResponse(isPage1, { timeout: 45_000 }).catch(() => null);
     const g = await gotoSettled(this.page, this.cfg.baseUrl + GS_PATH(gem), this.cfg);
     if (g.error || (g.status && g.status >= 400)) throw new StepError(`Could not open Gemstone Search (${g.error ?? 'HTTP ' + g.status})`);
     const r = await listWait;
     if (r) this.lastReq = post(r);
     await this.waitCount('opening the page');
+    recordPerf(this.page, { kind: 'Results shown', url: this.page.url().replace(this.cfg.baseUrl, '/'), name: `Gemstone Search ${gem} – results on screen`, ms: Date.now() - t0 });
     await this.page.waitForTimeout(800);
   }
 
@@ -49,10 +51,12 @@ export class GS {
   /** Runs a filter action and waits for the list the store sends back (the page updates by itself, no Search button). */
   async apply(c: Case, what: string, action: () => Promise<unknown>, expect?: RegExp): Promise<Gem[]> {
     c.step(what);
+    const t0 = Date.now();
     const r = await during(this.page, x => isPage1(x) && (!expect || expect.test(post(x))), action, what.toLowerCase());
     this.lastReq = post(r);
     await this.page.waitForTimeout(900);
     await this.waitCount(what.toLowerCase());
+    recordPerf(this.page, { kind: 'Results shown', url: this.page.url().replace(this.cfg.baseUrl, '/'), name: `Gemstone Search – after: ${what}`, ms: Date.now() - t0 });
     return gemsOf(r);
   }
 

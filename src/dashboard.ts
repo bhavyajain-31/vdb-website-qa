@@ -49,6 +49,7 @@ export function renderDashboard(r: RunReport, cfg: Config): string {
     images: img.entries.map(e => ({ ...e, pages: e.pages.map(short) })),
     imgTotals: img.totals,
     noLinks: r.links.length === 0,
+    view: r.view ?? 'links',
     jr: r.journeys ? {
       phase: r.journeys.phase, at: r.journeys.startedAt, ms: r.journeys.durationMs,
       cases: r.journeys.cases.map(c => ({ id: c.id, area: c.area, t: c.title, steps: c.steps, exp: c.expected, pr: c.priority, known: c.known, s: c.status, act: c.actual, why: c.reasons, log: c.log, url: c.url, shot: c.screenshot, at: c.testedAt, ms: c.ms })),
@@ -57,6 +58,7 @@ export function renderDashboard(r: RunReport, cfg: Config): string {
       phase: r.tracker.phase, at: r.tracker.startedAt, ms: r.tracker.durationMs,
       cases: r.tracker.cases.map(c => ({ id: c.id, area: c.area, t: c.title, steps: c.steps, exp: c.expected, pr: c.priority, known: c.known, s: c.status, act: c.actual, why: c.reasons, log: c.log, url: c.url, shot: c.screenshot, at: c.testedAt, ms: c.ms })),
       pages: r.tracker.pages ?? [],
+      perfMs: 3000,
     } : null,
   };
   const json = JSON.stringify(data).replace(/</g, '\\u003c');
@@ -206,8 +208,8 @@ details.tech table{font-size:12.5px;margin-top:6px;background:var(--surface)}
   <section class="tab" id="t-home" role="tabpanel"></section>
   <section class="tab" id="t-links" role="tabpanel"></section>
   <section class="tab" id="t-images" role="tabpanel"></section>
-  <section class="tab" id="t-cases" role="tabpanel"></section>
   <section class="tab" id="t-tracker" role="tabpanel"></section>
+  <section class="tab" id="t-perf" role="tabpanel"></section>
 </main>
 <script type="application/json" id="qa-data">${json}</script>
 <script>
@@ -240,12 +242,19 @@ function store(k, v){ try { if (v === undefined) return JSON.parse(localStorage.
 var dur = Math.round(D.durationMs/60000*10)/10;
 var started = new Date(D.startedAt);
 var executed = D.runs.length ? D.runs[D.runs.length-1].executed : 0;
+if (D.view === 'tracker' && D.tr) {
+  var trRan = D.tr.cases.filter(function(c){ return c.s !== 'SKIPPED'; });
+  document.getElementById('meta').innerHTML = '<span>Site <b>' + e(D.base) + '</b></span><span>Daily tracker run <b>' + e(new Date(D.tr.at).toLocaleString()) + '</b></span><span>Took <b>' + (Math.round(D.tr.ms/6000)/10) + ' min</b></span>' +
+    '<span>Automated <b>' + trRan.length + '</b> · passed <b>' + trRan.filter(function(c){ return c.s==='PASS'||c.s==='WARN'; }).length + '</b> · failed <b>' + trRan.filter(function(c){ return c.s==='FAIL'; }).length + '</b> · manual / skipped <b>' + D.tr.cases.filter(function(c){ return c.s==='SKIPPED'; }).length + '</b></span>';
+} else {
 document.getElementById('meta').innerHTML = '<span>Site <b>' + e(D.base) + '</b></span><span>Run <b>' + e(started.toLocaleString()) + '</b></span><span>Took <b>' + dur + ' min</b></span>' +
   '<span>Tested this run <b>' + executed + '</b> · kept from earlier runs <b>' + D.links.filter(function(l){return l.carried;}).length + '</b></span><span>Testing cycle <b>' + e(D.cycleId) + '</b> (run ' + D.runs.length + ')</span>';
+}
 
 // ---------- tabs
-var TABS = [['summary','Summary'],['home','Homepage & speed'],['links','Deeplinks'],['images','Images'],['cases','Test cases'],['tracker','Daily tracker']];
-var badge = { summary: S.critical, home: (D.places.length ? D.places.filter(function(p){ return p.s==='FAIL'; }).length : D.links.filter(function(l){ return l.depth===0 && l.s==='FAIL'; }).length) + D.comps.filter(function(c){return c.s==='FAIL' && c.kind!=='copy';}).length, links: S.fail, images: D.imgTotals.failed, cases: D.jr ? D.jr.cases.filter(function(c){ return c.s==='FAIL'; }).length : 0, tracker: D.tr ? D.tr.cases.filter(function(c){ return c.s==='FAIL'; }).length : 0 };
+// a link-check report shows the Phase 1 tabs; a daily tracker report shows only the tracker tabs
+var TABS = D.view === 'tracker' ? [['tracker','Daily tracker'],['perf','Performance concerns']] : [['summary','Summary'],['home','Homepage & speed'],['links','Deeplinks'],['images','Images']];
+var badge = { summary: S.critical, home: (D.places.length ? D.places.filter(function(p){ return p.s==='FAIL'; }).length : D.links.filter(function(l){ return l.depth===0 && l.s==='FAIL'; }).length) + D.comps.filter(function(c){return c.s==='FAIL' && c.kind!=='copy';}).length, links: S.fail, images: D.imgTotals.failed, perf: 0, tracker: D.tr ? D.tr.cases.filter(function(c){ return c.s==='FAIL'; }).length : 0 };
 var tabsEl = document.getElementById('tabs');
 TABS.forEach(function(t){
   var b = document.createElement('button'); b.setAttribute('role','tab'); b.id = 'b-' + t[0];
@@ -264,9 +273,6 @@ function show(id){
   var head = crit ? crit + ' critical problem' + (crit>1?'s':'') + ' need fixing' : 'No critical problems found';
   var sub = [perf ? perf + ' slow page' + (perf>1?'s':'') : '', minor ? minor + ' minor issue' + (minor>1?'s':'') : ''].filter(Boolean).join(' · ');
   var h = '<div class="banner"><div><div class="big">' + e(head) + '</div><div class="small">' + e(sub || 'No speed or minor issues') + ' · ' + S.total + ' links checked, ' + D.imgTotals.tested + ' images checked</div></div></div>';
-  if (D.noLinks) h += '<div class="note"><b>The link check has not run yet.</b> Only the Phase 2 / Daily tracker results are in this report (see those tabs). Run a link check (New cycle) to fill the other tabs.</div>';
-  if (D.jr) { var jf = D.jr.cases.filter(function(c){ return c.s==='FAIL'; }).length; h += '<div class="note" style="background:var(--soft);color:var(--ink)"><b>' + e(D.jr.phase) + ' test cases:</b> ' + D.jr.cases.filter(function(c){ return c.s==='PASS'||c.s==='WARN'; }).length + ' of ' + D.jr.cases.length + ' passed' + (jf ? ', <b style="color:var(--fail)">' + jf + ' failed</b>' : '') + ' (run ' + e(new Date(D.jr.at).toLocaleString()) + '). <a href="#cases">See the Test cases tab</a>.</div>'; }
-  if (D.tr) { var tf = D.tr.cases.filter(function(c){ return c.s==='FAIL'; }).length; var tn = D.tr.cases.filter(function(c){ return c.s!=='SKIPPED'; }).length; h += '<div class="note" style="background:var(--soft);color:var(--ink)"><b>Daily tracker:</b> ' + D.tr.cases.filter(function(c){ return c.s==='PASS'||c.s==='WARN'; }).length + ' of ' + tn + ' passed' + (tf ? ', <b style="color:var(--fail)">' + tf + ' failed</b>' : '') + ' (run ' + e(new Date(D.tr.at).toLocaleString()) + '). <a href="#tracker">See the Daily tracker tab</a>.</div>'; }
   if (D.stopped || S.pending) h += '<div class="note"><b>Not everything was tested yet.</b> ' + e(D.stopped ? D.stopped + '.' : '') + (S.pending ? ' ' + S.pending + ' links are waiting. Run the tool again and it continues where it stopped; finished results are kept.' : '') + '</div>';
 
   h += '<h2>Results by link</h2><p class="lead">Every link a shopper can reach from the homepage (menus, sliders, footer, product cards) was opened and checked. Click a box to see those links.</p><div class="grid">';
@@ -561,18 +567,25 @@ renderLinks();
   }, true);
 })();
 
-// ---------- SPEED: pages opened by the daily tracker (Homepage & speed tab)
+// ---------- PERFORMANCE CONCERNS (daily tracker only): steps that took more than 3 s to load or show results
 (function(){
-  if (!D.tr || !D.tr.pages || !D.tr.pages.length) return;
-  var P = D.tr.pages.slice().sort(function(a,b){ return (b.ms + b.waitedMs) - (a.ms + a.waitedMs); });
-  var slow = P.filter(function(p){ return p.ms > 8000 || p.tries > 1 || !p.ok; });
-  var h = '<h2 style="margin-top:34px">Pages opened by the daily tracker</h2><p class="lead">Every page the daily tracker opened (run ' + e(new Date(D.tr.at).toLocaleString()) + '), slowest first. When the store was busy (“too many requests” or no answer), the test waited and tried again instead of giving up; the wait is shown. ' + slow.length + ' of ' + P.length + ' pages were slow (over 8 s), busy or did not open.</p>' +
-    '<div class="panel tbl"><table><thead><tr><th>Page</th><th>Address</th><th style="text-align:right">Load time</th><th style="text-align:right">Tries</th><th style="text-align:right">Waited</th><th>Result</th></tr></thead><tbody>' +
-    P.map(function(p){
-      var res = !p.ok ? '<span style="color:var(--fail);font-weight:600">Did not open' + (p.status ? ' (' + p.status + ')' : '') + '</span>' : p.tries > 1 ? '<span style="color:var(--warn);font-weight:600">Opened after the store was busy</span>' : p.ms > 8000 ? '<span style="color:var(--warn);font-weight:600">Slow</span>' : 'OK';
-      return '<tr><td class="lbl">' + e(p.name) + '</td><td class="small">' + link(p.url) + '</td><td style="text-align:right">' + secs(p.ms) + '</td><td style="text-align:right">' + p.tries + '</td><td style="text-align:right">' + (p.waitedMs ? secs(p.waitedMs) : '–') + '</td><td>' + res + '</td></tr>';
+  var el = document.getElementById('t-perf');
+  if (!D.tr) { el.innerHTML = '<h2>Performance concerns</h2><div class="panel empty">The daily tracker has not been run yet.</div>'; return; }
+  var LIM = D.tr.perfMs || 3000;
+  var byId = {}; D.tr.cases.forEach(function(c){ byId[c.id] = c; });
+  var all = (D.tr.pages || []).filter(function(p){ return p.caseId; });
+  var slow = all.filter(function(p){ return p.ms > LIM || !p.ok || p.tries > 1; }).sort(function(a,b){ return (b.ms + b.waitedMs) - (a.ms + a.waitedMs); });
+  var cases = []; slow.forEach(function(p){ if (cases.indexOf(p.caseId) < 0) cases.push(p.caseId); });
+  var h = '<h2>Performance concerns</h2><p class="lead">Steps of the daily tracker test cases that took <b>more than ' + (LIM/1000) + ' s</b> to load a page or show results (passed and failed cases alike). Times are measured in the test browser: <b>Page load</b> = until the page has loaded; <b>Results shown</b> = from the shopper’s action (Search, a filter, opening a list) until the results are on screen; <b>3D model</b> = until the 3D viewer draws the ring. When the store answered “too many requests” or did not answer, the test waited and tried again; that wait is shown separately.</p>' +
+    '<div class="grid"><div class="tile WARN"><div class="n">' + cases.length + '</div><div class="l">Test cases with a slow step</div><div class="h">of ' + D.tr.cases.filter(function(c){ return c.s!=='SKIPPED'; }).length + ' automated cases</div></div><div class="tile WARN"><div class="n">' + slow.length + '</div><div class="l">Slow steps</div><div class="h">of ' + all.length + ' timed steps</div></div><div class="tile FAIL"><div class="n">' + slow.filter(function(p){ return !p.ok || p.tries > 1; }).length + '</div><div class="l">Store busy or no answer</div><div class="h">opened only after waiting, or not at all</div></div></div>';
+  if (!slow.length) { el.innerHTML = h + '<div class="panel empty" style="margin-top:16px">Every step loaded within ' + (LIM/1000) + ' s.</div>'; return; }
+  h += '<div class="panel tbl" style="margin-top:16px"><table><thead><tr><th>Test case</th><th>Result</th><th>What was slow</th><th>Address</th><th style="text-align:right">Time</th><th style="text-align:right">Waited (busy)</th></tr></thead><tbody>' +
+    slow.map(function(p){
+      var c = byId[p.caseId] || { t: '', s: 'PASS' };
+      var res = !p.ok ? '<div class="small" style="color:var(--fail)">Did not open' + (p.status ? ' (' + p.status + ')' : '') + '</div>' : p.tries > 1 ? '<div class="small" style="color:var(--warn)">Busy: opened on try ' + p.tries + '</div>' : '';
+      return '<tr><td class="lbl" style="white-space:nowrap">' + e(p.caseId) + '<div class="small">' + e(c.t) + '</div></td><td>' + pill(c.s) + '</td><td>' + e(p.kind || 'Page load') + ': ' + e(p.name) + res + '</td><td class="small">' + link(p.url) + '</td><td style="text-align:right;font-weight:600;color:' + (p.ms > LIM * 2 ? 'var(--fail)' : 'var(--warn)') + '">' + secs(p.ms) + '</td><td style="text-align:right">' + (p.waitedMs ? secs(p.waitedMs) : '–') + '</td></tr>';
     }).join('') + '</tbody></table></div>';
-  document.getElementById('t-home').insertAdjacentHTML('beforeend', h);
+  el.innerHTML = h;
 })();
 
 // ---------- TEST CASES (Phase 2) and DAILY TRACKER — same table, two tabs
@@ -582,9 +595,9 @@ function caseTab(tabId, px, J, title, lead, empty){
   var C = J.cases;
   var CS = { s: 'all', area: 'all', q: '', open: null };
   var h = '<h2>' + e(J.phase) + '</h2><p class="lead">' + lead + ' Run ' + e(new Date(J.at).toLocaleString()) + ', took ' + (Math.round(J.ms/6000)/10) + ' min. Nothing is submitted or ordered; Add to cart uses a temporary cart. Click a row for the steps.</p><div class="grid">';
-  ['FAIL','WARN','BLOCKED','PASS'].forEach(function(s){
+  ['FAIL','WARN','BLOCKED','PASS','SKIPPED'].forEach(function(s){
     var n = C.filter(function(c){ return c.s===s; }).length;
-    h += '<button class="tile ' + s + '" data-go="' + s + '"><div class="n">' + n + '</div><div class="l">' + e(NAMES[s]) + '</div><div class="h">' + e({FAIL:'The store did not do what the test case expects.',WARN:'Works; something is worth a look (see the reason).',BLOCKED:'The test could not decide (for example no stock to check). See the reason.',PASS:'Works as the test case expects.'}[s]) + '</div></button>';
+    h += '<button class="tile ' + s + '" data-go="' + s + '"><div class="n">' + n + '</div><div class="l">' + e(NAMES[s]) + '</div><div class="h">' + e({FAIL:'The store did not do what the test case expects.',WARN:'Works; something is worth a look (see the reason).',BLOCKED:'The test could not decide (for example no stock to check). See the reason.',PASS:'Works as the test case expects.',SKIPPED:'Manual testing or nothing to test right now; the reason is shown.'}[s]) + '</div></button>';
   });
   h += '</div><div class="controls" id="' + px + 'tcStatus" style="margin-top:18px"></div><div class="controls"><select id="' + px + 'tcArea" aria-label="Area"></select><input type="search" id="' + px + 'tcQ" placeholder="Find by ID or words…" aria-label="Find a test case"></div>' +
     '<div class="panel tbl"><table><thead><tr><th>ID</th><th>Result</th><th>Test case</th><th class="hide-s">Expected result</th><th>What happened</th></tr></thead><tbody id="' + px + 'tcBody"></tbody></table></div>';
@@ -618,11 +631,10 @@ function caseTab(tabId, px, J, title, lead, empty){
   }
   render();
 }
-caseTab('t-cases', 'p2', D.jr, 'Test cases', 'Each case from the test case sheet, run in a real browser like a shopper: filters set, buttons clicked, results read on screen and compared with the data the store sent.', 'The Phase 2 test cases have not been run yet. On the run page choose <b>Phase 2 test cases</b> (or run <code>npm run qa:phase2</code>).');
-caseTab('t-tracker', 'tr', D.tr, 'Daily tracker', 'The daily monitoring tracker (TC-01 to TC-33), run like a shopper: menus, search, filters, product pages, Ring Builder both ways and Diamond Search, each flow ending in the cart. TC-26, TC-29 and TC-30 stay manual.', 'The daily tracker tests have not been run yet. On the run page choose <b>Daily tracker tests</b> (or run <code>npm run qa:tracker</code>).');
+caseTab('t-tracker', 'tr', D.tr, 'Daily tracker', 'The daily monitoring tracker (TC-01 to TC-33), run like a shopper: menus, search, filters, product pages, Ring Builder both ways and Diamond Search, each flow ending in the cart. Manual / skipped cases show their reason. Slow steps are listed in the Performance concerns tab.', 'The daily tracker tests have not been run yet. On the run page choose <b>Daily tracker tests</b> (or run <code>npm run qa:tracker</code>).');
 
 var start = (location.hash || '').slice(1);
-show(TABS.some(function(t){ return t[0]===start; }) ? start : (D.noLinks && (D.tr || D.jr) ? (D.tr && (!D.jr || D.tr.at > D.jr.at) ? 'tracker' : 'cases') : 'summary'));
+show(TABS.some(function(t){ return t[0]===start; }) ? start : TABS[0][0]);
 window.addEventListener('hashchange', function(){ var h = (location.hash || '').slice(1); if (TABS.some(function(t){ return t[0]===h; })) show(h); });
 })();
 </script>

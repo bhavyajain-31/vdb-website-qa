@@ -5,7 +5,19 @@ import type { Config } from '../config.js';
 import { newContext } from '../browser.js';
 import type { Status } from '../types.js';
 import { CASES } from './catalog.js';
-import type { CaseDef, CaseResult } from './types.js';
+import type { CaseDef, CaseResult, PageLoad } from './types.js';
+
+/** Timed steps (page loads, results shown, 3D model) with the test case they belong to. */
+export const PERF: PageLoad[] = [];
+const pageCase = new WeakMap<Page, string>();
+/** Records how long a step took, against the test case running on that page. */
+export function recordPerf(page: Page, e: Omit<PageLoad, 'caseId' | 'at' | 'tries' | 'waitedMs' | 'ok'> & Partial<Pick<PageLoad, 'tries' | 'waitedMs' | 'ok'>>) {
+  PERF.push({ tries: 1, waitedMs: 0, ok: true, ...e, caseId: pageCase.get(page), at: new Date().toISOString() });
+}
+/** Real page-load time from the browser (load event, else DOMContentLoaded). */
+export async function navMs(page: Page): Promise<number | undefined> {
+  return page.evaluate(() => { const n = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined; return n ? Math.round(n.loadEventEnd || n.domContentLoadedEventEnd) || undefined : undefined; }).catch(() => undefined);
+}
 
 /** Raised for a step the test could not carry out (element missing, page never answered). Reported as "Couldn't verify". */
 export class StepError extends Error {}
@@ -30,6 +42,8 @@ export class Case {
   /** The test could not decide (no data to check, page never answered). */
   blocked(msg: string) { if (this.status !== 'FAIL') this.status = 'BLOCKED'; this.reasons.push(msg); }
   note(msg: string) { this.notes.push(msg); }
+  /** Nothing to test right now (e.g. no sold-out product): shown as Skipped with the reason. */
+  skip(msg: string) { if (this.status !== 'FAIL') this.status = 'SKIPPED'; this.reasons.push(msg); }
 }
 
 export class Suite {
@@ -61,6 +75,7 @@ export class Suite {
     const c = new Case(this.def(id));
     const t0 = Date.now();
     const at = new Date().toISOString();
+    if (page) pageCase.set(page, id);
     const missing = needs.filter(n => !this.ok(n));
     if (missing.length) {
       c.blocked(`Needs ${missing.join(', ')} to work first, so this could not be checked`);

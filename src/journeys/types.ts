@@ -36,7 +36,7 @@ export interface CaseResult {
 }
 
 /** One page the tests opened, with how long it took (for the speed list). */
-export interface PageLoad { url: string; name: string; ms: number; status?: number; tries: number; waitedMs: number; at: string; ok: boolean; note?: string }
+export interface PageLoad { url: string; name: string; ms: number; status?: number; tries: number; waitedMs: number; at: string; ok: boolean; note?: string; caseId?: string; kind?: 'Page load' | 'Results shown' | '3D model' }
 
 export interface JourneyReport {
   phase: string;

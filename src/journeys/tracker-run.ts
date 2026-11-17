@@ -7,11 +7,11 @@ import { launch } from '../browser.js';
 import { configureGate } from '../throttle.js';
 import { writeReports } from '../report.js';
 import type { RunReport } from '../types.js';
-import { Suite } from './harness.js';
+import { PERF, Suite } from './harness.js';
 import type { CaseResult, JourneyReport } from './types.js';
-import { lastReportFile, loadJourneys, loadTracker, trackerFile } from './store.js';
+import { loadTracker, trackerFile } from './store.js';
 import { TRACKER } from './tracker-catalog.js';
-import { PAGES, defineTracker, trackerDiamonds, trackerHome, trackerMobile, trackerSettingFirst, trackerShop, trackerStoneFirst, TRACKER_GROUPS } from './tracker.js';
+import { defineTracker, trackerDiamonds, trackerHome, trackerMobile, trackerSettingFirst, trackerShop, trackerStoneFirst, TRACKER_GROUPS } from './tracker.js';
 
 const STATUS: Record<string, string> = { PASS: 'Passed', WARN: 'Passed with warnings', FAIL: 'Failed', BLOCKED: "Couldn't verify", SKIPPED: 'Manual testing', PENDING: 'Not run' };
 const csvCell = (v: string) => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
@@ -62,16 +62,12 @@ async function main() {
     if (t.manual) return { id: t.id, area: t.area, title: t.title, steps: t.steps, expected: t.expected, priority: t.priority, known: '', status: 'SKIPPED', actual: `Manual testing: ${t.manualReason ?? 'not automated'}.`, reasons: [], log: [], ms: 0, testedAt: startedAt };
     return suite.results.get(t.id) ?? prev?.cases.find(r => r.id === t.id);
   }).filter(Boolean) as CaseResult[];
-  const jr: JourneyReport = { phase: 'Daily tracker', startedAt, finishedAt: new Date().toISOString(), durationMs: Date.now() - t0, cases, pages: PAGES };
+  const jr: JourneyReport = { phase: 'Daily tracker', startedAt, finishedAt: new Date().toISOString(), durationMs: Date.now() - t0, cases, pages: PERF };
   fs.mkdirSync(path.dirname(trackerFile(cfg)), { recursive: true });
   fs.writeFileSync(trackerFile(cfg), JSON.stringify(jr, null, 1));
 
-  let report: RunReport;
-  try { report = JSON.parse(fs.readFileSync(lastReportFile(cfg), 'utf8')); } catch {
-    report = { baseUrl: cfg.baseUrl, cycleId: '–', runId: startedAt, startedAt, finishedAt: jr.finishedAt, durationMs: 0, config: {}, runs: [], links: [], placements: [], deadClickables: [], scenarios: [], homePerf: [], homeImages: [] };
-  }
-  report.tracker = jr;
-  report.journeys = loadJourneys(cfg);
+  // a daily tracker report stands on its own: no Phase 1 (link check) tabs
+  const report: RunReport = { baseUrl: cfg.baseUrl, cycleId: '–', runId: startedAt, startedAt, finishedAt: jr.finishedAt, durationMs: jr.durationMs, config: {}, runs: [], links: [], placements: [], deadClickables: [], scenarios: [], homePerf: [], homeImages: [], view: 'tracker', tracker: jr };
   const out = writeReports(report, cfg);
   const csv = trackerCsv(jr);
   fs.writeFileSync(path.join(cfg.outDir, csv.name), csv.text);

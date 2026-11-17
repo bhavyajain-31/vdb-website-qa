@@ -2,7 +2,7 @@
 import type { Browser, Page, Response } from 'playwright';
 import type { Config } from '../config.js';
 import { gotoSettled } from '../browser.js';
-import { Case, Suite, StepError, during, forgetFilters, fmt$, isVisible, journeyContext, list, money, must, setSlider, visible, watchDialogs } from './harness.js';
+import { Case, Suite, StepError, during, forgetFilters, recordPerf, fmt$, isVisible, journeyContext, list, money, must, setSlider, visible, watchDialogs } from './harness.js';
 
 const DS_PATH = 'apps/vdb-app/search-filters?structure=new';
 
@@ -54,6 +54,7 @@ export class DS {
   /** Presses Search (or runs `action`) and waits for the results the app shows. */
   async search(c: Case | undefined, action?: () => Promise<unknown>, what = 'pressing Search', pred: (r: Response) => boolean = isPage1): Promise<SearchResult> {
     c?.step(what.replace(/^pressing/, 'Press'));
+    const t0 = Date.now();
     const countWait = this.page.waitForResponse(isCount, { timeout: 45_000 }).catch(() => null);
     const r = await during(this.page, pred, action ?? (() => this.page.locator('a.vdb-search-diamond-data-wrap').locator('visible=true').first().click()), what, 45_000);
     const items = await diamondsOf(r);
@@ -68,6 +69,7 @@ export class DS {
       const cards = [...document.querySelectorAll('.vdb-search-result-block')].some(e => (e as HTMLElement).offsetWidth > 0);
       return idle && ((!!el && /\d/.test(el.innerText)) || cards);
     }, null, { timeout: 45_000 }).catch(() => { throw new StepError(`Results did not appear after ${what}`); });
+    recordPerf(this.page, { kind: 'Results shown', url: this.page.url().replace(this.cfg.baseUrl, '/'), name: `Diamond Search – ${what.replace(/^pressing /, 'after pressing ')}`, ms: Date.now() - t0 });
     await this.page.waitForTimeout(600);
     const shown = await this.shownCount();
     return { total: shown ?? total, items, req: post(r) };

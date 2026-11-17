@@ -3,11 +3,10 @@
 import type { Browser, Page, Response } from 'playwright';
 import type { Config } from '../config.js';
 import { gotoSettled, settle } from '../browser.js';
-import { Case, Suite, StepError, fmt$, forgetFilters, isVisible, journeyContext, list, money, must, visible, watchDialogs } from './harness.js';
+import { Case, Suite, StepError, fmt$, forgetFilters, isVisible, journeyContext, list, money, must, navMs, recordPerf, visible, watchDialogs } from './harness.js';
 import { DS, isPage1 } from './diamond.js';
 import { GS } from './gemstone.js';
 import { afterChange, facetOptions, loadAllImages, openSearch, productData, products, submitSearch, tickOption } from './search.js';
-import type { PageLoad } from './types.js';
 import { TRACKER } from './tracker-catalog.js';
 
 const RB = 'apps/ring-creator/';
@@ -23,9 +22,6 @@ export function defineTracker(suite: Suite) {
 
 // ------------------------------------------------------------------ shared helpers
 
-/** Every page the tracker opened, with its load time (shown in the Homepage & speed tab). */
-export const PAGES: PageLoad[] = [];
-const SLOW_MS = 8000;
 
 /**
  * Opens a page like a shopper. The store is sometimes slow or answers "too many requests" (429):
@@ -38,13 +34,12 @@ async function open(page: Page, cfg: Config, url: string, c?: Case, what = 'the 
   for (let attempt = 1; attempt <= 4; attempt++) {
     const t0 = Date.now();
     const g = await gotoSettled(page, full, { ...cfg, navTimeoutMs: 60_000 });
-    const ms = Date.now() - t0;
+    const ms = (await navMs(page)) ?? Date.now() - t0; // the browser's own page-load time
     last = g;
     const busy = g.status === 429 || g.status === 503 || /Timeout/i.test(g.error ?? '');
     const ok = !g.error && !(g.status && g.status >= 400);
     if (ok || !busy || attempt === 4) {
-      PAGES.push({ url: full.replace(cfg.baseUrl, '/'), name: what.replace(/^the /, ''), ms, status: g.status, tries: attempt, waitedMs: waited, at: new Date().toISOString(), ok,
-        note: attempt > 1 ? `store busy (${g.status ?? 'timeout'}) – opened on try ${attempt} after waiting ${Math.round(waited / 1000)} s` : ms > SLOW_MS ? 'slow' : undefined });
+      recordPerf(page, { kind: 'Page load', url: full.replace(cfg.baseUrl, '/'), name: what.replace(/^the /, ''), ms, status: g.status, tries: attempt, waitedMs: waited, ok });
       if (attempt > 1 && ok) c?.note(`(${what} was busy and opened on try ${attempt}, after ${Math.round(waited / 1000)} s.)`);
       if (!ok) throw new StepError(`Could not open ${what} (${g.error ?? 'HTTP ' + g.status}${attempt > 1 ? `, still busy after ${attempt} tries over ${Math.round(waited / 1000)} s` : ''})`);
       return g;
@@ -101,9 +96,13 @@ const isRbList = (kind: 'stone' | 'setting') => (r: Response) => new RegExp(`rb-
 /** Opens a Ring Builder list and returns the rows the store sent for it. */
 async function rbList(page: Page, cfg: Config, url: string, kind: 'stone' | 'setting', c: Case, what: string) {
   const wait = page.waitForResponse(isRbList(kind), { timeout: 45_000 }).catch(() => null);
+  const t0 = Date.now();
   await open(page, cfg, url, c, what);
   const r = await wait;
-  await page.waitForTimeout(1500);
+  const part = kind === 'stone' ? 'rb-stone-details' : 'rb-setting-details';
+  await page.waitForFunction(p => [...document.querySelectorAll(`a[href*="${p}"]`)].some(a => (a as HTMLElement).offsetWidth > 0 && (a as HTMLElement).innerText.trim()), part, { timeout: 20_000 }).catch(() => {});
+  recordPerf(page, { kind: 'Results shown', url: page.url().replace(cfg.baseUrl, '/'), name: `${what} – ${kind}s on screen`, ms: Date.now() - t0 });
+  await page.waitForTimeout(800);
   return { rows: await rbRows(r), req: r ? post(r) : '' };
 }
 
@@ -378,23 +377,17 @@ export async function trackerShop(browser: Browser, cfg: Config, suite: Suite) {
       if (!c.check(ps.length > 0, `"${sugg[idx]}" (${landed}) shows no products`)) return;
       const halo = ps.filter(p => /halo/i.test(p.title));
       c.check(halo.length >= Math.ceil(ps.length / 2), `Only ${halo.length} of ${ps.length} products on ${landed} are halo rings`);
-      // the picture on each card must be one of that product's own pictures
-      const data = await productData(page);
-      const base = (u: string) => (u.split('?')[0].split('/').pop() ?? '').toLowerCase();
-      const wrongImg = ps.filter(p => { const d = data.find(x => x.handle === p.handle); return d && p.img && d.images.length && !d.images.some(i => base(i) === base(p.img)); });
+      // pictures only need to load: a product may show the picture of the selected metal (rose gold, yellow gold …)
       const noImg = ps.filter(p => !p.imgOk);
-      c.check(!noImg.length, `${noImg.length} products show no picture: ${list(noImg.map(p => `${p.title} (${p.href})`))}`);
-      c.check(!wrongImg.length, `${wrongImg.length} products show a picture that is not theirs: ${list(wrongImg.map(p => `${p.title}: ${base(p.img)}`))}`);
+      c.check(!noImg.length, `${noImg.length} products show no picture (broken or missing): ${list(noImg.map(p => `${p.title} (${p.href})`))}`);
       const pick = halo[0] ?? ps[0];
       c.step(`Open "${pick.title}"`);
       await open(page, cfg, pick.href, undefined, `"${pick.title}"`);
       const h1 = (await page.locator('#MainContent h1').first().innerText().catch(() => '')).trim();
-      const main = await page.locator('#MainContent .product__media img, #MainContent media-gallery img').first().evaluate(i => ({ src: (i as HTMLImageElement).currentSrc || (i as HTMLImageElement).src, ok: (i as HTMLImageElement).complete && (i as HTMLImageElement).naturalWidth > 0 })).catch(() => null);
-      const d = data.find(x => x.handle === pick.handle);
+      const main = await page.locator('#MainContent .product__media img, #MainContent media-gallery img').first().evaluate(i => (i as HTMLImageElement).complete && (i as HTMLImageElement).naturalWidth > 0).catch(() => false);
       c.check(h1.toLowerCase() === pick.title.toLowerCase(), `Clicking "${pick.title}" opens "${h1 || 'a page without a title'}"`);
-      c.check(!!main?.ok, `"${pick.title}" opens without a product picture`);
-      if (main && d?.images.length) c.check(d.images.some(i => base(i) === base(main.src)), `"${pick.title}" opens with a picture that is not one of its own (${base(main.src)})`);
-      c.actual = `Suggestion "${sugg[idx]}" + Enter opens ${landed}: ${halo.length} of ${ps.length} products are halo rings, every card shows its own picture; "${h1}" opens with its own picture.`;
+      c.check(main, `"${pick.title}" opens without a product picture`);
+      c.actual = `Suggestion "${sugg[idx]}" + Enter opens ${landed}: ${halo.length} of ${ps.length} products are halo rings, all with pictures; "${h1}" opens with its picture.`;
     });
 
     await suite.run('TC-05', page, async c => {
@@ -501,7 +494,7 @@ export async function trackerShop(browser: Browser, cfg: Config, suite: Suite) {
       await open(page, cfg, 'collections/wedding-bands', c, 'the Wedding Bands collection');
       const ps = await products(page);
       const sold = ps.find(p => p.soldOut);
-      if (!sold) { c.blocked('No wedding band is sold out right now, so the sold-out page could not be checked'); c.actual = `${ps.length} bands, none sold out.`; return; }
+      if (!sold) { c.skip('No wedding band is sold out right now, so the sold-out page could not be checked'); c.actual = `${ps.length} bands, none sold out.`; return; }
       const link = page.locator('#product-grid > li, ul.product-grid > li').filter({ hasText: sold.title }).locator('a[href*="/products/"]').first();
       c.step(`Open "${sold.title}"`);
       await Promise.all([page.waitForURL(/\/products\//, { timeout: 20_000 }).catch(() => {}), link.click()]);
@@ -539,7 +532,7 @@ export async function trackerShop(browser: Browser, cfg: Config, suite: Suite) {
         const totalShown = money(await page.locator('.totals__total-value, .totals__subtotal-value').first().innerText().catch(() => ''));
         c.check(unit != null && Math.abs((cart!.items[0].final_line_price / 100) - unit * 2) < 0.01, 'The line total did not double');
         c.check(totalShown != null && Math.abs(totalShown - cart!.total_price / 100) < 0.01, `The estimated total on the page (${fmt$(totalShown)}) does not match the cart (${fmt$(cart!.total_price / 100)})`);
-      } else if (errText) c.warn(`Only 1 in stock: the cart says "${errText}"`);
+      } else if (errText) c.note(`(Only 1 in stock: the cart says "${errText}", which is the correct behaviour.)`);
       else c.fail('Quantity did not change to 2 and no message explained why');
       c.step('Remove the item');
       await must(page.locator('cart-remove-button a, cart-remove-button button, .cart-item__remove').first().click(), 'remove the cart line');
@@ -783,23 +776,34 @@ export async function trackerSettingFirst(browser: Browser, cfg: Config, suite: 
         settings = (await visibleLinks(page, 'rb-setting-details')).filter(s => /ring_stock_num/.test(s.href));
         if (!settings.length) throw new StepError('No settings could be found anywhere to continue');
       }
-      c.step(`Pick setting "${settings[0].text}"`);
-      await open(page, cfg, settings[0].href);
-      await chooseMetal(page, c);
-      const size = await chooseSize(page, c, 6);
-      const setting = await readDetail(page);
-      const stoneWait = page.waitForResponse(isRbList('stone'), { timeout: 45_000 }).catch(() => null);
-      c.step('Click Select Setting');
-      await must((await visible(page.locator('a.vdb-rc-setting-pdp__select-btn'))).click(), 'click "Select Setting"');
-      await page.waitForURL(/rb-stone-list|rb-ring-review/, { timeout: 30_000 }).catch(() => { throw new StepError('Select Setting did not move on to choosing a stone'); });
-      const sr = await stoneWait;
-      const stones = await rbRows(sr);
-      await page.waitForTimeout(1500);
+      // some settings take only one exact stone size (e.g. 0.63 ct Cushion) that may be out of stock:
+      // then the test goes back and picks the next setting (up to 4), and notes the ones without stones
+      let setting: Detail | undefined, size = '', stones: any[] = [], links: { href: string; text: string }[] = [];
+      const empty: string[] = [];
+      for (const pick of settings.slice(0, 4)) {
+        c.step(`Pick setting "${pick.text}"`);
+        await open(page, cfg, pick.href, undefined, `setting "${pick.text}"`);
+        await chooseMetal(page, c);
+        size = await chooseSize(page, c, 6);
+        setting = await readDetail(page);
+        const stoneWait = page.waitForResponse(isRbList('stone'), { timeout: 45_000 }).catch(() => null);
+        const t0 = Date.now();
+        c.step('Click Select Setting');
+        await must((await visible(page.locator('a.vdb-rc-setting-pdp__select-btn'))).click(), 'click "Select Setting"');
+        await page.waitForURL(/rb-stone-list|rb-ring-review/, { timeout: 30_000 }).catch(() => { throw new StepError('Select Setting did not move on to choosing a stone'); });
+        stones = await rbRows(await stoneWait);
+        await page.waitForFunction(() => [...document.querySelectorAll('a[href*="rb-stone-details"]')].some(a => (a as HTMLElement).offsetWidth > 0 && (a as HTMLElement).innerText.trim()), null, { timeout: 15_000 }).catch(() => {});
+        recordPerf(page, { kind: 'Results shown', url: page.url().replace(cfg.baseUrl, '/'), name: `Stones for setting "${pick.text}"`, ms: Date.now() - t0 });
+        links = await visibleLinks(page, 'rb-stone-details');
+        if (links.length) break;
+        const u = new URL(page.url()).searchParams;
+        empty.push(`"${pick.text}" (needs ${[u.get('shape'), u.get('min_carat') && u.get('min_carat') === u.get('max_carat') ? `${u.get('min_carat')} ct` : u.get('min_carat') ? `${u.get('min_carat')}–${u.get('max_carat')} ct` : ''].filter(Boolean).join(' ') || 'its stone'}) – ${page.url().replace(cfg.baseUrl, '/')}`);
+      }
+      if (empty.length) c.note(`(No stones in stock for ${empty.length} setting${empty.length > 1 ? 's' : ''}, so the next one was used: ${list(empty, 3)}.)`);
+      if (!links.length || !setting) { c.fail(`None of the first ${empty.length} settings offers any stone: ${list(empty, 4)}`); return; }
       const supported = setting.shapes.length ? setting.shapes : setting.shape ? [setting.shape] : [];
       const incompatible = stones.filter(r => supported.length && !supported.some(s => sameShape(s, r.shape)));
       c.check(!incompatible.length, `${incompatible.length} of ${stones.length} stones offered do not fit the setting (it takes ${supported.join(', ')}; offered e.g. ${incompatible[0]?.shape})`);
-      const links = await visibleLinks(page, 'rb-stone-details');
-      if (!links.length) { c.fail('No stones are offered for the chosen setting'); return; }
       c.step(`Pick "${links[0].text}"`);
       await open(page, cfg, links[0].href);
       const stone = await readDetail(page);
@@ -843,45 +847,97 @@ export async function trackerSettingFirst(browser: Browser, cfg: Config, suite: 
       const o = await changed(m); const s2 = await stock();
       c.check(s2 !== s1 && !o.equals(m), `Changing the shape to Oval does not update the model and stock number (${s1} → ${s2}, waited 20 s)`);
       c.note(`(The 3D model took about ${renderS} s to appear.)`);
+      recordPerf(page, { kind: '3D model', url: page.url().replace(cfg.baseUrl, '/'), name: '3D Ring Builder – model drawn', ms: renderS * 1000 });
       c.actual = `3D model renders, rotates when dragged; stock ${s0} → ${s1} (metal) → ${s2} (Oval), model updated each time.`;
     });
 
     await suite.run('TC-20', page, async c => {
+      // where shoppers reach the configurators: the menus and the homepage button
+      const entries = (await headerLinks(page, cfg)).filter(l => /configure/i.test(l.label));
+      const home = await page.$$eval('#MainContent a[href]', as => as.filter(a => /configure/i.test(a.textContent ?? '')).map(a => ({ label: (a.textContent ?? '').replace(/\s+/g, ' ').trim(), href: (a as HTMLAnchorElement).href })));
+      const all = [...entries.map(e => ({ ...e, where: 'menu' })), ...home.map(e => ({ ...e, where: 'homepage' }))];
+      if (!c.check(all.length > 0, 'No "Configure" links found in the menus or on the homepage')) return;
+      const dests = [...new Set(all.map(e => new URL(e.href).pathname))];
+      c.note(`(Configurator links: ${list(all.map(e => `${e.where} "${e.label}" → ${new URL(e.href).pathname}`), 5)}.)`);
       const out: string[] = [];
-      for (const [col, name] of [['collections/configure-diamond-rings', 'Configure Rings'], ['collections/configure-pendants', 'Configure Fine Jewelry (pendants)']]) {
-        await open(page, cfg, col, c, name);
+      for (const dest of dests) {
+        const label = all.filter(e => new URL(e.href).pathname === dest).map(e => `"${e.label}"`).join(' / ');
+        await open(page, cfg, dest, c, `${label} (${dest})`);
         // the configurable products are drawn by an app after the page loads: scroll down and wait for them
         let first: string | undefined;
+        const t0 = Date.now();
         for (let k = 0; k < 15 && !first; k++) {
           first = await page.$$eval('#MainContent a[href*="/products/"]', as => (as.find(a => (a as HTMLElement).offsetWidth > 0) as HTMLAnchorElement | undefined)?.href);
           if (!first) { await page.mouse.wheel(0, 700); await page.waitForTimeout(2000); }
         }
-        if (!c.check(!!first, `${name} shows no products`)) continue;
-        await open(page, cfg, first!, c, `the first ${name} product`);
-        await must(visible(page.locator('.vdb-spjc-config-panel__price'), 30_000), `see the price on the ${name} configurator`);
+        recordPerf(page, { kind: 'Results shown', url: dest, name: `${label} – products on screen`, ms: Date.now() - t0 });
+        if (!c.check(!!first, `${label} (${dest}) shows no products, even after scrolling down`)) continue;
+        await open(page, cfg, first!, c, 'the first configurable product');
+        await must(visible(page.locator('.vdb-spjc-config-panel__price'), 30_000), 'see the configurator (price panel)');
         await page.waitForTimeout(1500);
-        const state = async () => ({ price: money(await page.locator('.vdb-spjc-config-panel__price').first().innerText().catch(() => '')), stock: (await mainText(page)).match(/Stock # (\S+)/)?.[1], img: await page.$$eval('#MainContent img', is => (is.filter(i => i.getBoundingClientRect().width > 200).map(i => (i as HTMLImageElement).currentSrc || (i as HTMLImageElement).src)[0]) ?? '') });
-        const s0 = await state();
-        const changes: string[] = [];
-        let priceMoved = false, imgMoved = false;
-        const swatches = page.locator('button.vdb-spjc-swatch-circle').locator('visible=true');
-        const labels = await swatches.allInnerTexts();
-        for (const want of ['Platinum', '18K Yellow Gold', 'Oval']) {
-          const i = labels.findIndex(l => l.trim() === want);
-          if (i < 0) continue;
+        const title = (await page.locator('#MainContent h1, #MainContent h2').first().innerText().catch(() => '')).trim();
+        // tag every option button by its group (shape, size, metal colour, head / shank metal colour)
+        const groups = await page.evaluate(() => {
+          const SHAPES = /^(round|oval|pear|emerald|princess|radiant|cushion|marquise|asscher|heart)$/i;
+          const btns = [...document.querySelectorAll('#MainContent button')].filter(b => (b as HTMLElement).offsetWidth > 0) as HTMLElement[];
+          const shape = btns.filter(b => SHAPES.test(b.innerText.trim()));
+          const metal = btns.filter(b => /gold|platinum|silver/i.test(b.innerText) && b.innerText.trim().length < 30);
+          const size = btns.filter(b => /^\d+(\.\d+)?$/.test(b.innerText.trim()));
+          const txt = document.querySelector('#MainContent')!.textContent ?? '';
+          const two = /Head Metal Colou?r/i.test(txt) && /Shank Metal Colou?r/i.test(txt) && metal.length % 2 === 0;
+          const g: Record<string, HTMLElement[]> = { Shape: shape, Size: size };
+          if (two) { g['Head Metal Color'] = metal.slice(0, metal.length / 2); g['Shank Metal Color'] = metal.slice(metal.length / 2); } else g['Metal Color'] = metal;
+          const out: Record<string, { i: number; text: string; active: boolean }[]> = {};
+          for (const [name, list] of Object.entries(g)) {
+            if (!list.length) continue;
+            out[name] = list.map((b, i) => { b.setAttribute('data-qa-opt', `${name}|${i}`); return { i, text: b.innerText.trim(), active: /active|selected|checked/i.test(b.className) || b.getAttribute('aria-pressed') === 'true' }; });
+          }
+          return out;
+        });
+        const state = async () => ({
+          price: money(await page.locator('.vdb-spjc-config-panel__price').first().innerText().catch(() => '')),
+          stock: (await mainText(page)).match(/Stock # (\S+)/)?.[1],
+          img: await page.$$eval('#MainContent img', is => (is.filter(i => i.getBoundingClientRect().width > 200).map(i => (i as HTMLImageElement).currentSrc || (i as HTMLImageElement).src)[0]) ?? ''),
+        });
+        const rows: string[] = [];
+        const noStock: string[] = [], noImg: string[] = [];
+        let metalPriceMoved = false, metalTried = 0;
+        for (const [name, opts] of Object.entries(groups)) {
+          const cur = opts.find(o => o.active) ?? opts[0];
+          const next = opts.find(o => o !== cur && o.text !== cur.text);
+          if (!next) continue;
           const before = await state();
-          c.step(`Choose ${want}`);
-          await swatches.nth(i).click().catch(() => {});
-          await page.waitForTimeout(2500);
-          const after = await state();
-          if (after.price !== before.price) priceMoved = true;
-          if (after.img !== before.img || after.stock !== before.stock) imgMoved = true;
-          changes.push(`${want}: ${fmt$(before.price)} → ${fmt$(after.price)}, stock ${after.stock}`);
+          c.step(`${name}: ${cur.text} → ${next.text}`);
+          await page.locator(`[data-qa-opt="${name}|${next.i}"]`).click().catch(() => {});
+          let after = before;
+          for (let k = 0; k < 8; k++) { await page.waitForTimeout(1000); after = await state(); if (after.stock !== before.stock && after.img !== before.img) break; }
+          if (after.stock === before.stock) noStock.push(`${name} → ${next.text} (stays ${before.stock})`);
+          if (after.img === before.img) noImg.push(`${name} → ${next.text}`);
+          if (/metal/i.test(name)) { metalTried++; if (after.price !== before.price) metalPriceMoved = true; }
+          rows.push(`${name} ${next.text}: stock ${before.stock} → ${after.stock}, price ${fmt$(before.price)} → ${fmt$(after.price)}, picture ${after.img !== before.img ? 'changed' : 'same'}`);
         }
-        if (!changes.length) { c.blocked(`${name}: no options to change were found`); continue; }
-        c.check(imgMoved, `${name}: the image and stock number do not change with the options`);
-        c.check(priceMoved, `${name}: the price stays ${fmt$(s0.price)} after changing metal and shape`);
-        out.push(`${name} (${changes.join('; ')})`);
+        if (!rows.length) { c.blocked(`"${title}": no options to change were found`); continue; }
+        if (!groups.Size) c.note(`("${title}" has no size option.)`);
+        c.check(!noStock.length, `"${title}": the stock number does not change for ${list(noStock, 4)}`);
+        c.check(!noImg.length, `"${title}": the picture does not change for ${list(noImg, 4)}`);
+        if (metalTried) c.check(metalPriceMoved, `"${title}": the price stays the same after changing the metal (${list(rows.filter(r => /Metal/.test(r)), 3)})`);
+        // 3D view for the chosen options
+        const open3d = page.getByText(/Open 3D/i).locator('visible=true').first();
+        if (await open3d.count()) {
+          c.step('Click "Open 3D 360°"');
+          const t3 = Date.now();
+          await open3d.click().catch(() => {});
+          const canvas = page.locator('canvas').locator('visible=true').first();
+          let shot: Buffer = Buffer.alloc(0);
+          if (await canvas.waitFor({ timeout: 20_000 }).then(() => true).catch(() => false)) {
+            while (shot.length < 8000 && Date.now() - t3 < 60_000) { await page.waitForTimeout(2500); shot = await canvas.screenshot({ timeout: 15_000 }).catch(() => Buffer.alloc(0)); }
+          }
+          recordPerf(page, { kind: '3D model', url: page.url().replace(cfg.baseUrl, '/'), name: `"${title}" – 3D view drawn`, ms: Date.now() - t3, ok: shot.length >= 8000 });
+          c.check(shot.length >= 8000, `"${title}": the 3D view stays blank after 60 s`);
+          rows.push(`3D view ${shot.length >= 8000 ? `shown after ${Math.round((Date.now() - t3) / 1000)} s` : 'blank'}`);
+          await page.keyboard.press('Escape').catch(() => {});
+        } else c.note(`("${title}" has no 3D button.)`);
+        out.push(`${label} → "${title}": ${rows.join('; ')}`);
       }
       c.actual = out.join(' | ');
     });

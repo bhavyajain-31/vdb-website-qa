@@ -53,7 +53,6 @@ RUN_CHOICES = {
     "Test everything (new testing cycle)": "new-cycle",
     "Continue the previous cycle (only what is not tested yet)": "continue",
     "Re-test only the failures (after a fix)": "retest-failed",
-    "Phase 2 test cases + filter results (search, Diamond & Gemstone Search, ~15 min)": "phase2-tests",
     "Daily tracker tests (TC-01 to TC-33: flows to cart, no checkout, ~10 min)": "tracker-tests",
 }
 
@@ -86,39 +85,32 @@ def show_report(files: dict[str, bytes], label: str, zip_bytes: bytes | None = N
     res = json.loads(files["results.json"])
     s = res.get("summary", {})
     st.subheader(f"Report: {label}")
-    c = st.columns(6)
-    c[0].metric("Links checked", s.get("total", 0))
-    c[1].metric("Passed", s.get("pass", 0) + s.get("warn", 0))
-    c[2].metric("Failed", s.get("fail", 0))
-    c[3].metric("Couldn't verify", s.get("blocked", 0))
-    c[4].metric("Not run yet", s.get("pending", 0))
-    c[5].metric("Broken images", s.get("images", {}).get("failed", 0))
-    c = st.columns(3)
-    c[0].metric("Critical problems", s.get("critical", 0))
-    c[1].metric("Slow pages", s.get("performance", 0))
-    c[2].metric("Minor issues", s.get("minor", 0))
-    for key, label, tab in (("tracker", "Daily tracker", "Daily tracker"),):
-        tj = res.get(key)
-        if tj:
-            cs = [x for x in tj.get("cases", []) if x.get("status") != "SKIPPED"]
-            cnt = lambda *k: sum(1 for x in cs if x.get("status") in k)
-            st.markdown(f"**{label}** (run {ago(tj.get('startedAt'))}) · see the *{tab}* tab below; results CSV below")
-            c = st.columns(4)
-            c[0].metric("Automated cases", len(cs))
-            c[1].metric("Pass", cnt("PASS", "WARN"))
-            c[2].metric("Fail", cnt("FAIL"))
-            c[3].metric("Blocked", cnt("BLOCKED"))
-    jr = res.get("journeys")
-    if jr:
-        cs = jr.get("cases", [])
+    tj = res.get("tracker")
+    if res.get("view") == "tracker" and tj:
+        # a daily tracker report: only the tracker's own numbers
+        cs = [x for x in tj.get("cases", []) if x.get("status") != "SKIPPED"]
         cnt = lambda *k: sum(1 for x in cs if x.get("status") in k)
-        st.markdown(f"**{jr.get('phase', 'Phase 2')} test cases** (run {ago(jr.get('startedAt'))}) · see the *Test cases* tab below")
-        c = st.columns(4)
-        c[0].metric("Test cases", len(cs))
+        slow = [p for p in tj.get("pages", []) if p.get("caseId") and (p.get("ms", 0) > 3000 or p.get("tries", 1) > 1 or not p.get("ok", True))]
+        c = st.columns(5)
+        c[0].metric("Automated cases", len(cs))
         c[1].metric("Passed", cnt("PASS", "WARN"))
         c[2].metric("Failed", cnt("FAIL"))
         c[3].metric("Couldn't verify", cnt("BLOCKED"))
-    if s.get("pending"):
+        c[4].metric("Slow steps (> 3 s)", len(slow))
+        st.caption("Tabs below: Daily tracker (every TC with its result) and Performance concerns (steps over 3 s).")
+    else:
+        c = st.columns(6)
+        c[0].metric("Links checked", s.get("total", 0))
+        c[1].metric("Passed", s.get("pass", 0) + s.get("warn", 0))
+        c[2].metric("Failed", s.get("fail", 0))
+        c[3].metric("Couldn't verify", s.get("blocked", 0))
+        c[4].metric("Not run yet", s.get("pending", 0))
+        c[5].metric("Broken images", s.get("images", {}).get("failed", 0))
+        c = st.columns(3)
+        c[0].metric("Critical problems", s.get("critical", 0))
+        c[1].metric("Slow pages", s.get("performance", 0))
+        c[2].metric("Minor issues", s.get("minor", 0))
+    if s.get("pending") and res.get("view") != "tracker":
         st.info(f"{s['pending']} links were not reached before the time limit. Start a run with "
                 "“Continue the previous cycle” to finish them; finished results are kept.")
     d = st.columns(4)
